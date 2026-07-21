@@ -1,0 +1,8 @@
+schema: spec-driven
+context: |
+  项目: TransitMonitor（中转站倍率监控）。
+  技术栈: Go（stdlib + modernc.org/sqlite + gopkg.in/yaml.v3 + github.com/go-chi/chi/v5 + golang.org/x/time），单二进制，无 CGO。
+  领域: 周期性抓取 LLM 中转站（new-api / sub2api）的"倍率"配置，归一化为可比的有效 USD/1M token，存时序，
+        检测变更、告警、仪表盘可视化；并对隐藏倍率的站发真实小请求反推真实有效倍率、对账暴露暗中加价。
+  约定: TDD（RED→GREEN→REFACTOR）、表驱动测试、httptest fixtures、凭据静态加密、日志永不打印明文密钥。
+  SDD 真源: 所有能力规约存放于 openspec/changes/<change>/specs/<capability>/spec.md，先于代码落地。

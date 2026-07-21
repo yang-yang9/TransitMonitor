@@ -1,0 +1,60 @@
+# TransitMonitor sample config.
+# Copy to config.yaml and fill in real credentials (protect file: chmod 600).
+# Run: ./transitmonitor -config config.yaml           # serve + poll loop
+#       ./transitmonitor -config config.yaml -once     # one scrape, print, exit
+#       ./transitmonitor -selftest                     # in-process self-test (no real station)
+
+db:
+  path: transitmonitor.db
+
+dashboard:
+  addr: "127.0.0.1:7421"
+  token: ""                # set to require Authorization: Bearer <token> for non-localhost
+
+alerts:
+  rules:
+    - name: price-up-5pct
+      type: delta_pct
+      threshold: 5
+      enabled: true
+    - name: model-removed
+      type: model_removed
+      enabled: true
+  dingtalk:
+    webhook: ""            # https://oapi.dingtalk.com/robot/send?access_token=...
+    secret: ""             # DingTalk signing secret
+  webhook:
+    url: ""                # generic webhook URL
+
+stations:
+  - id: my-relay
+    name: My new-api Relay
+    base_url: https://relay.example.com
+    kind: newapi
+    auth:
+      pat: ""              # system access token (optional; for /api/user/self/groups, /api/option)
+      api_key: "sk-..."    # sk- key (for /v1/* + probe)
+      group: default
+    poll_interval: 3m
+    enabled: true
+    probe:
+      enabled: false       # set true to send a real tiny chat request
+      model: gpt-4o-mini
+      max_input_tokens: 8
+      max_output_tokens: 1
+      max_cost_cents_per_run: 1
+      dry_run: true
+  - id: my-sub
+    name: My sub2api Station
+    base_url: https://sub.example.com
+    kind: sub2api
+    auth:
+      api_key: "sk-..."     # for /v1/* + billing
+      jwt: ""                # user JWT for /api/v1/channels/available (per-model prices)
+      admin_api_key: ""      # admin x-api-key (reserved)
+      group: default
+    poll_interval: 3m
+    enabled: true
+    probe:
+      enabled: false
+      dry_run: true

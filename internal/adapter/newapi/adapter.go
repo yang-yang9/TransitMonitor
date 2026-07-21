@@ -1,0 +1,306 @@
+// Package newapi implements adapter.Adapter for QuantumNous/new-api stations.
+//
+// Fallback chain (mirrors new-api's own controller/ratio_sync.go contract):
+//
+//	/api/status (public, currency+self-use context)  → always
+//	/api/ratio_config (gated by ExposeRatioEnabled)    → richest, 403 → fallback
+//	/api/pricing (public by default)                   → per-model []Pricing
+//	/api/user/self/groups (PAT)                         → per-user group ratios (override)
+//
+// Spec: openspec/.../specs/ratio-collection-newapi/spec.md
+package newapi
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"transitmonitor/internal/domain"
+	"transitmonitor/internal/normalize"
+)
+
+const defaultQuotaPerUnit = 500000.0
+
+// Adapter scrapapes a new-api station.
+type Adapter struct {
+	StationID string
+	BaseURL   string
+	PAT       string // system access token (UserAuth/Admin/Root) for /api/user/self/groups
+	APIKey    string // sk- key for /v1/* + probe (unused by FetchRatios)
+	Group     string // group to observe
+	Client    *http.Client
+	now       func() time.Time
+}
+
+// New constructs a new-api adapter. group defaults to "default".
+func New(stationID, baseURL, pat, apiKey, group string, client *http.Client) *Adapter {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if group == "" {
+		group = "default"
+	}
+	return &Adapter{
+		StationID: stationID, BaseURL: baseURL, PAT: pat, APIKey: apiKey,
+		Group: group, Client: client, now: time.Now,
+	}
+}
+
+// SetClock injects a clock (for tests).
+func (a *Adapter) SetClock(f func() time.Time) { a.now = f }
+
+func (a *Adapter) nowTime() time.Time {
+	if a.now != nil {
+		return a.now()
+	}
+	return time.Now()
+}
+
+// --- response shapes (verified against new-api source; see docs/upstream-contract.md) ---
+
+type statusResp struct {
+	Success bool `json:"success"`
+	Data    struct {
+		QuotaPerUnit       float64 `json:"quota_per_unit"`
+		SelfUseModeEnabled bool    `json:"self_use_mode_enabled"`
+		USDExchangeRate    float64 `json:"usd_exchange_rate"`
+	} `json:"data"`
+}
+
+type pricingItem struct {
+	ModelName        string   `json:"model_name"`
+	QuotaType        int      `json:"quota_type"`
+	ModelRatio       float64  `json:"model_ratio"`
+	ModelPrice       float64  `json:"model_price"`
+	CompletionRatio  float64  `json:"completion_ratio"`
+	CacheRatio       *float64 `json:"cache_ratio"`
+	CreateCacheRatio *float64 `json:"create_cache_ratio"`
+	EnableGroup      []string `json:"enable_groups"`
+}
+
+type pricingResp struct {
+	Success    bool               `json:"success"`
+	Data       []pricingItem      `json:"data"`
+	GroupRatio map[string]float64 `json:"group_ratio"`
+}
+
+type ratioConfigData struct {
+	ModelRatio       map[string]float64 `json:"model_ratio"`
+	CompletionRatio  map[string]float64 `json:"completion_ratio"`
+	CacheRatio       map[string]float64 `json:"cache_ratio"`
+	CreateCacheRatio map[string]float64 `json:"create_cache_ratio"`
+	ModelPrice       map[string]float64 `json:"model_price"`
+	GroupRatio       map[string]float64 `json:"group_ratio"`
+}
+
+type ratioConfigResp struct {
+	Success bool            `json:"success"`
+	Data    ratioConfigData `json:"data"`
+}
+
+type userGroupsResp struct {
+	Success bool `json:"success"`
+	Data    map[string]struct {
+		Ratio float64 `json:"ratio"`
+	} `json:"data"`
+}
+
+// doGet issues a GET and returns status + body. Non-200 is NOT an error here;
+// callers decide based on status (e.g. 403 ratio_config → fall back to pricing).
+func (a *Adapter) doGet(ctx context.Context, path, bearer string) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.BaseURL+path, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := a.Client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, nil
+}
+
+func endpoint(path string, status int, err error, at time.Time) domain.EndpointStatus {
+	es := domain.EndpointStatus{Path: path, HTTPStatus: status, AttemptedAt: at}
+	if err != nil {
+		es.Error = err.Error()
+	}
+	es.OK = err == nil && status >= 200 && status < 300
+	return es
+}
+
+// ProbeCapabilities discovers which endpoints/auth succeed.
+func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityReport, error) {
+	caps := domain.CapabilityReport{
+		StationID: a.StationID, Kind: domain.KindNewAPI, QuotaPerUnit: defaultQuotaPerUnit,
+	}
+	now := a.nowTime()
+
+	// /api/status (public): currency + self-use context.
+	if status, body, err := a.doGet(ctx, "/api/status", ""); err == nil {
+		caps.HasStatus = status == 200
+		caps.Endpoints = append(caps.Endpoints, endpoint("/api/status", status, nil, now))
+		if status == 200 {
+			var sr statusResp
+			if json.Unmarshal(body, &sr) == nil {
+				if sr.Data.QuotaPerUnit > 0 {
+					caps.QuotaPerUnit = sr.Data.QuotaPerUnit
+				}
+				caps.SelfUseMode = sr.Data.SelfUseModeEnabled
+				caps.USDExchangeRate = sr.Data.USDExchangeRate
+			}
+		}
+	}
+
+	// /api/ratio_config (gated by ExposeRatioEnabled; 403 when off).
+	if status, _, err := a.doGet(ctx, "/api/ratio_config", ""); err == nil {
+		caps.HasRatioConfig = status == 200
+		caps.Endpoints = append(caps.Endpoints, endpoint("/api/ratio_config", status, nil, now))
+	}
+
+	// /api/pricing (public by default).
+	if status, _, err := a.doGet(ctx, "/api/pricing", ""); err == nil {
+		caps.HasPricing = status == 200
+		caps.Endpoints = append(caps.Endpoints, endpoint("/api/pricing", status, nil, now))
+	}
+
+	// /api/user/self/groups (PAT).
+	if a.PAT != "" {
+		if status, _, err := a.doGet(ctx, "/api/user/self/groups", a.PAT); err == nil {
+			caps.HasUserGroups = status == 200
+			caps.Endpoints = append(caps.Endpoints, endpoint("/api/user/self/groups", status, nil, now))
+		}
+	}
+
+	return caps, nil
+}
+
+// FetchRatios picks the richest available ratio source, fetches, normalizes.
+func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport) (domain.RawSnapshot, []domain.RatioObservation, error) {
+	snap := domain.RawSnapshot{
+		StationID: a.StationID, ObservedAt: a.nowTime(), Capabilities: caps,
+		RawPayloads: map[string][]byte{},
+	}
+	data := normalize.NewAPIRatioData{QuotaPerUnit: caps.QuotaPerUnit, SelfUseMode: caps.SelfUseMode}
+
+	var src string
+	switch {
+	case caps.HasRatioConfig:
+		src = "/api/ratio_config"
+		status, body, err := a.doGet(ctx, src, "")
+		if err != nil {
+			return snap, nil, err
+		}
+		if status != 200 {
+			return snap, nil, fmt.Errorf("ratio_config: status %d", status)
+		}
+		snap.RawPayloads[src] = body
+		var rc ratioConfigResp
+		if err := json.Unmarshal(body, &rc); err != nil {
+			return snap, nil, err
+		}
+		data.TopGroupRatio = rc.Data.GroupRatio
+		data.Models = a.modelsFromMaps(rc.Data)
+	case caps.HasPricing:
+		src = "/api/pricing"
+		status, body, err := a.doGet(ctx, src, "")
+		if err != nil {
+			return snap, nil, err
+		}
+		if status != 200 {
+			return snap, nil, fmt.Errorf("pricing: status %d", status)
+		}
+		snap.RawPayloads[src] = body
+		var pr pricingResp
+		if err := json.Unmarshal(body, &pr); err != nil {
+			return snap, nil, err
+		}
+		data.TopGroupRatio = pr.GroupRatio
+		data.Models = a.modelsFromPricing(pr.Data, caps.SelfUseMode)
+	default:
+		// No ratio source at all (e.g. pricing auth-gated + ratio_config off).
+		return snap, nil, fmt.Errorf("no ratio source available for station %s", a.StationID)
+	}
+	snap.EndpointsUsed = []string{src}
+
+	// Per-user group ratios override the top-level group_ratio.
+	if a.PAT != "" {
+		if status, body, err := a.doGet(ctx, "/api/user/self/groups", a.PAT); err == nil && status == 200 {
+			var ug userGroupsResp
+			if json.Unmarshal(body, &ug) == nil {
+				m := make(map[string]float64, len(ug.Data))
+				for g, v := range ug.Data {
+					m[g] = v.Ratio
+				}
+				data.UserGroupRatio = m
+				snap.EndpointsUsed = append(snap.EndpointsUsed, "/api/user/self/groups")
+			}
+		}
+	}
+
+	obs := normalize.NewAPINormalize(data)
+	for i := range obs {
+		obs[i].StationID = a.StationID
+		obs[i].ObservedAt = snap.ObservedAt
+		obs[i].SourceEndpoint = src
+	}
+	return snap, obs, nil
+}
+
+func (a *Adapter) modelsFromPricing(items []pricingItem, selfUse bool) []normalize.NewAPIModel {
+	out := make([]normalize.NewAPIModel, 0, len(items))
+	for _, p := range items {
+		// /api/pricing does not expose whether a model's ratio is configured vs
+		// the self-use 37.5 fallback. Under self-use mode, treat 37.5 as the
+		// sentinel (unconfigured); confirming a real 37.5 would need
+		// /api/ratio_config or /api/option (typically unavailable here).
+		known := !(selfUse && p.ModelRatio == normalize.SelfUseSentinelRatio)
+		m := normalize.NewAPIModel{
+			Name: p.ModelName, QuotaType: p.QuotaType,
+			ModelRatio: p.ModelRatio, ModelPrice: p.ModelPrice,
+			CacheRatio: p.CacheRatio, CreateCacheRatio: p.CreateCacheRatio,
+			Group: a.Group, KnownRatio: known,
+		}
+		if p.CompletionRatio != 0 { // 0 → absent → normalize infers 1.0
+			cr := p.CompletionRatio
+			m.CompletionRatio = &cr
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func (a *Adapter) modelsFromMaps(d ratioConfigData) []normalize.NewAPIModel {
+	out := make([]normalize.NewAPIModel, 0, len(d.ModelRatio)+len(d.ModelPrice))
+	seen := make(map[string]bool, len(d.ModelRatio)+len(d.ModelPrice))
+	for name, mr := range d.ModelRatio {
+		m := normalize.NewAPIModel{Name: name, QuotaType: 0, ModelRatio: mr, Group: a.Group, KnownRatio: true}
+		if cr, ok := d.CompletionRatio[name]; ok && cr != 0 {
+			m.CompletionRatio = &cr
+		}
+		if cv, ok := d.CacheRatio[name]; ok {
+			m.CacheRatio = &cv
+		}
+		if cc, ok := d.CreateCacheRatio[name]; ok {
+			m.CreateCacheRatio = &cc
+		}
+		out = append(out, m)
+		seen[name] = true
+	}
+	for name, price := range d.ModelPrice { // pure fixed-price models live only in model_price
+		if seen[name] || price <= 0 {
+			continue
+		}
+		out = append(out, normalize.NewAPIModel{
+			Name: name, QuotaType: 1, ModelPrice: price, Group: a.Group, KnownRatio: true,
+		})
+	}
+	return out
+}

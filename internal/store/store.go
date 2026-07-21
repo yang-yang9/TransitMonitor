@@ -1,0 +1,363 @@
+// Package store is the embedded SQLite persistence layer (modernc.org/sqlite,
+// pure Go, no CGO). It owns schema migrations, ratio time-series CRUD,
+// encrypted credentials, and retention/downsampling. Spec:
+// openspec/.../specs/storage-retention/spec.md and station-management (encryption).
+package store
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"transitmonitor/internal/domain"
+	"transitmonitor/internal/secrets"
+
+	_ "modernc.org/sqlite"
+)
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
+
+// placeholders returns "(?,?,...,?)" with n placeholders.
+func placeholders(n int) string {
+	if n <= 0 {
+		return "()"
+	}
+	return "(" + strings.Repeat("?,", n-1) + "?)"
+}
+
+var ratioCols = []string{
+	"station_id", "group_name", "model_name", "native_ratio", "native_ratio_kind", "quota_type",
+	"input_usd_per_1m", "output_usd_per_1m", "cache_read_usd_per_1m", "cache_write_usd_per_1m",
+	"fixed_price_usd", "completion_ratio", "peak_info", "declared_unavailable", "sentinel", "note",
+	"observed_at", "source_endpoint",
+}
+
+var changeCols = []string{
+	"station_id", "group_name", "model_name", "field", "old_value", "new_value",
+	"delta_abs", "delta_pct", "observed_at", "severity",
+}
+
+var probeCols = []string{
+	"station_id", "model_name", "tokens_in", "tokens_out",
+	"declared_native_ratio", "declared_effective_usd_per_1m",
+	"measured_usd_per_1m", "markup_pct", "cost_usd",
+	"declared_unavailable", "observed_at", "error",
+}
+
+// Store wraps a SQLite connection.
+type Store struct {
+	db *sql.DB
+}
+
+// Open opens (or creates) the database at path and applies migrations.
+func Open(path string) (*Store, error) {
+	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(on)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{db: db}
+	if err := s.Migrate(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// Close closes the database.
+func (s *Store) Close() error { return s.db.Close() }
+
+// Migrate applies embedded SQL migrations in order, idempotently.
+func (s *Store) Migrate(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)`); err != nil {
+		return err
+	}
+	var applied int
+	if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM schema_version").Scan(&applied); err != nil {
+		return err
+	}
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ver, err := strconv.Atoi(name[:4])
+		if err != nil {
+			return fmt.Errorf("bad migration name %s: %w", name, err)
+		}
+		if ver <= applied {
+			continue
+		}
+		content, err := migrationsFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx, string(content)); err != nil {
+			return fmt.Errorf("migration %s: %w", name, err)
+		}
+		if _, err := s.db.ExecContext(ctx, "INSERT INTO schema_version(version) VALUES(?)", ver); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// InsertRatioObservations stores a batch of observations (one scrape's worth).
+func (s *Store) InsertRatioObservations(ctx context.Context, obs []domain.RatioObservation) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	q := "INSERT INTO ratio_observations (" + strings.Join(ratioCols, ", ") + ") VALUES " + placeholders(len(ratioCols))
+	for _, o := range obs {
+		du := 0
+		if o.DeclaredUnavailable {
+			du = 1
+		}
+		if _, err := tx.ExecContext(ctx, q,
+			o.StationID, o.GroupName, o.ModelName, o.NativeRatio, o.NativeRatioKind, o.QuotaType,
+			o.InputUSDPer1M, o.OutputUSDPer1M, o.CacheReadUSDPer1M, o.CacheWriteUSDPer1M,
+			o.FixedPriceUSD, o.CompletionRatio, o.PeakInfo, du, o.Sentinel, o.Note,
+			o.ObservedAt.Unix(), o.SourceEndpoint,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// LatestRatioObservations returns the most recent observation per (group, model)
+// for a station.
+func (s *Store) LatestRatioObservations(ctx context.Context, stationID string) ([]domain.RatioObservation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		station_id, group_name, model_name, native_ratio, native_ratio_kind, quota_type,
+		input_usd_per_1m, output_usd_per_1m, cache_read_usd_per_1m, cache_write_usd_per_1m,
+		fixed_price_usd, completion_ratio, peak_info, declared_unavailable, sentinel, note,
+		observed_at, source_endpoint
+		FROM ratio_observations WHERE station_id=? ORDER BY observed_at DESC`, stationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := make(map[string]bool)
+	var out []domain.RatioObservation
+	for rows.Next() {
+		var o domain.RatioObservation
+		var du int
+		var ts int64
+		if err := rows.Scan(
+			&o.StationID, &o.GroupName, &o.ModelName, &o.NativeRatio, &o.NativeRatioKind, &o.QuotaType,
+			&o.InputUSDPer1M, &o.OutputUSDPer1M, &o.CacheReadUSDPer1M, &o.CacheWriteUSDPer1M,
+			&o.FixedPriceUSD, &o.CompletionRatio, &o.PeakInfo, &du, &o.Sentinel, &o.Note,
+			&ts, &o.SourceEndpoint,
+		); err != nil {
+			return nil, err
+		}
+		o.DeclaredUnavailable = du == 1
+		o.ObservedAt = time.Unix(ts, 0).UTC()
+		key := o.GroupName + "|" + o.ModelName
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// InsertChangeEvents stores a batch of change events.
+func (s *Store) InsertChangeEvents(ctx context.Context, events []domain.ChangeEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	q := "INSERT INTO change_events (" + strings.Join(changeCols, ", ") + ") VALUES " + placeholders(len(changeCols))
+	for _, e := range events {
+		if _, err := tx.ExecContext(ctx, q,
+			e.StationID, e.Group, e.Model, e.Field, e.Old, e.New, e.DeltaAbs, e.DeltaPct,
+			e.ObservedAt.Unix(), e.Severity,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListChangeEvents returns the most recent change events for a station.
+func (s *Store) ListChangeEvents(ctx context.Context, stationID string, limit int) ([]domain.ChangeEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT station_id, group_name, model_name, field, old_value, new_value, delta_abs, delta_pct, observed_at, severity
+		FROM change_events WHERE station_id=? ORDER BY observed_at DESC LIMIT ?`, stationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ChangeEvent
+	for rows.Next() {
+		var e domain.ChangeEvent
+		var ts int64
+		if err := rows.Scan(&e.StationID, &e.Group, &e.Model, &e.Field, &e.Old, &e.New,
+			&e.DeltaAbs, &e.DeltaPct, &ts, &e.Severity); err != nil {
+			return nil, err
+		}
+		e.ObservedAt = time.Unix(ts, 0).UTC()
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// InsertProbeResult stores one probe result.
+func (s *Store) InsertProbeResult(ctx context.Context, r domain.ProbeResult) error {
+	du := 0
+	if r.DeclaredUnavailable {
+		du = 1
+	}
+	q := "INSERT INTO probe_results (" + strings.Join(probeCols, ", ") + ") VALUES " + placeholders(len(probeCols))
+	_, err := s.db.ExecContext(ctx, q,
+		r.StationID, r.Model, r.TokensIn, r.TokensOut,
+		r.DeclaredNativeRatio, r.DeclaredEffectiveUSDPer1M, r.MeasuredUSDPer1M, r.MarkupPct, r.CostUSD,
+		du, r.ObservedAt.Unix(), r.Error,
+	)
+	return err
+}
+
+// ListProbeResults returns the most recent probe results for a station.
+func (s *Store) ListProbeResults(ctx context.Context, stationID string, limit int) ([]domain.ProbeResult, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT station_id, model_name, tokens_in, tokens_out,
+		declared_native_ratio, declared_effective_usd_per_1m, measured_usd_per_1m, markup_pct, cost_usd,
+		declared_unavailable, observed_at, error FROM probe_results WHERE station_id=? ORDER BY observed_at DESC LIMIT ?`,
+		stationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.ProbeResult
+	for rows.Next() {
+		var r domain.ProbeResult
+		var du int
+		var ts int64
+		if err := rows.Scan(&r.StationID, &r.Model, &r.TokensIn, &r.TokensOut,
+			&r.DeclaredNativeRatio, &r.DeclaredEffectiveUSDPer1M, &r.MeasuredUSDPer1M, &r.MarkupPct, &r.CostUSD,
+			&du, &ts, &r.Error); err != nil {
+			return nil, err
+		}
+		r.DeclaredUnavailable = du == 1
+		r.ObservedAt = time.Unix(ts, 0).UTC()
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// InsertAuditLog writes one audit entry. Callers must redact secrets in detail.
+func (s *Store) InsertAuditLog(ctx context.Context, actor, action, target, detail string) error {
+	_, err := s.db.ExecContext(ctx, "INSERT INTO audit_log (actor, action, target, detail) VALUES (?,?,?,?)",
+		actor, action, target, detail)
+	return err
+}
+
+// ListAuditLogs returns the most recent audit entries.
+func (s *Store) ListAuditLogs(ctx context.Context, limit int) ([]domain.AuditEntry, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, ts, actor, action, target, detail FROM audit_log ORDER BY ts DESC LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.AuditEntry
+	for rows.Next() {
+		var e domain.AuditEntry
+		if err := rows.Scan(&e.ID, &e.Ts, &e.Actor, &e.Action, &e.Target, &e.Detail); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// InsertSnapshot stores a raw snapshot payload.
+func (s *Store) InsertSnapshot(ctx context.Context, snap domain.RawSnapshot) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO snapshots (station_id, observed_at, endpoints, payloads, capabilities) VALUES (?,?,?,?,?)`,
+		snap.StationID, snap.ObservedAt.Unix(),
+		strings.Join(snap.EndpointsUsed, ","), []byte{}, "", // payloads/capabilities serialized later
+	)
+	return err
+}
+
+// DownsampleAndRetain deletes old snapshots (older than snapshotDays) and
+// aggregates ratio_observations older than obsDays into hourly buckets, then
+// deletes the aggregated raw rows. Idempotent.
+func (s *Store) DownsampleAndRetain(ctx context.Context, now time.Time, snapshotDays, obsDays int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	snapCutoff := now.AddDate(0, 0, -snapshotDays).Unix()
+	obsCutoff := now.AddDate(0, 0, -obsDays).Unix()
+
+	if _, err := tx.ExecContext(ctx, "DELETE FROM snapshots WHERE observed_at < ?", snapCutoff); err != nil {
+		return err
+	}
+
+	// Aggregate old raw observations into hourly buckets (upsert).
+	if _, err := tx.ExecContext(ctx, `INSERT INTO ratio_observations_hourly
+		(station_id, group_name, model_name, hour, avg_input, min_input, max_input, avg_output, min_output, max_output)
+		SELECT station_id, group_name, model_name,
+		       strftime('%Y-%m-%d %H', observed_at, 'unixepoch') AS h,
+		       AVG(input_usd_per_1m), MIN(input_usd_per_1m), MAX(input_usd_per_1m),
+		       AVG(output_usd_per_1m), MIN(output_usd_per_1m), MAX(output_usd_per_1m)
+		FROM ratio_observations
+		WHERE observed_at < ? AND sentinel = ''
+		GROUP BY station_id, group_name, model_name, h
+		ON CONFLICT(station_id, group_name, model_name, hour) DO UPDATE SET
+			avg_input=excluded.avg_input, min_input=excluded.min_input, max_input=excluded.max_input,
+			avg_output=excluded.avg_output, min_output=excluded.min_output, max_output=excluded.max_output`,
+		obsCutoff); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, "DELETE FROM ratio_observations WHERE observed_at < ?", obsCutoff); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SetCredentials encrypts and stores credentials for a station (upsert).
+func (s *Store) SetCredentials(ctx context.Context, stationID string, key []byte, plaintext string) error {
+	ct, nonce, err := secrets.Encrypt(key, []byte(plaintext))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO credentials (station_id, ciphertext, nonce, updated_at) VALUES (?,?,?,CURRENT_TIMESTAMP)
+		 ON CONFLICT(station_id) DO UPDATE SET ciphertext=excluded.ciphertext, nonce=excluded.nonce, updated_at=CURRENT_TIMESTAMP`,
+		stationID, ct, nonce)
+	return err
+}
+
+// GetCredentials decrypts and returns stored credentials.
+func (s *Store) GetCredentials(ctx context.Context, stationID string, key []byte) (string, error) {
+	var ct, nonce []byte
+	err := s.db.QueryRowContext(ctx, "SELECT ciphertext, nonce FROM credentials WHERE station_id=?", stationID).Scan(&ct, &nonce)
+	if err != nil {
+		return "", err
+	}
+	pt, err := secrets.Decrypt(key, ct, nonce)
+	if err != nil {
+		return "", err
+	}
+	return string(pt), nil
+}

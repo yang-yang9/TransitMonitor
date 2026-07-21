@@ -1,0 +1,29 @@
+# binaries
+/transitmonitor
+/transitmonitor.exe
+*.test
+coverage.out
+coverage.html
+
+# go workspace
+/go.work
+/go.work.sum
+
+# sqlite data (runtime)
+*.db
+*.db-wal
+*.db-shm
+/data/
+
+# env / secrets
+.env
+.env.*
+!.env.example
+*.key
+config.yaml            # real station config (copy from config.example.yaml)
+
+# editor
+.idea/
+.vscode/
+*.swp
+.DS_Store

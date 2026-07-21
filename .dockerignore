@@ -1,0 +1,22 @@
+# Build context exclusions — keep the image lean.
+.git
+.github
+.gitignore
+tmp-transitmonitor
+transitmonitor
+*.db
+*.db-wal
+*.db-shm
+/data/
+docs/
+openspec/
+scripts/
+testdata/
+*.md
+!README.md
+.env
+.env.*
+config.yaml
+config.example.yaml
+Makefile
+.claude

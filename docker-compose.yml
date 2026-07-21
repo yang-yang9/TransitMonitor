@@ -1,0 +1,30 @@
+# TransitMonitor — Docker Compose.
+# Copy config.example.yaml → config.yaml (fill real credentials), then:
+#   TRANSMONITOR_DASHBOARD_TOKEN=... TRANSMONITOR_ENCRYPTION_KEY=... docker compose up -d
+# Dashboard: http://<host>:7421  (Authorization: Bearer $TRANSMONITOR_DASHBOARD_TOKEN)
+
+services:
+  transitmonitor:
+    build: .
+    image: transitmonitor:latest
+    container_name: transitmonitor
+    restart: unless-stopped
+    ports:
+      - "7421:7421"
+    environment:
+      TRANSMONITOR_DASHBOARD_ADDR: 0.0.0.0:7421
+      TRANSMONITOR_DASHBOARD_TOKEN: ${TRANSMONITOR_DASHBOARD_TOKEN:-}
+      TRANSMONITOR_ENCRYPTION_KEY: ${TRANSMONITOR_ENCRYPTION_KEY:-}
+      TRANSMONITOR_LOG_LEVEL: ${TRANSMONITOR_LOG_LEVEL:-info}
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro   # your station config (read-only)
+      - tm-data:/data                          # sqlite db persists across restarts
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7421/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  tm-data:
