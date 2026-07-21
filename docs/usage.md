@@ -59,14 +59,21 @@ stations: [ ... ]   # 见 §5
 
 | 端点 | 说明 |
 |---|---|
-| `GET /` | HTML 总览（站列表）|
+| `GET /` | HTML 总览（站列表 + 导航）|
+| `GET /matrix` | HTML 跨站有效 USD/1M 矩阵 |
+| `GET /changes?station=` | HTML 变更事件表 |
+| `GET /probes?station=` | HTML 探测结果表（含 markup）|
+| `GET /audit` | HTML 审计日志 |
+| `GET /metrics` | Prometheus 指标（免鉴权，供 Prom 抓取）|
 | `GET /healthz` | 健康检查（免鉴权，供 Docker/k8s）|
-| `GET /api/stations` | 站列表（凭据脱敏）|
+| `GET /api/stations` | 站列表（凭据脱敏，JSON）|
 | `GET /api/ratios?station=` | 某站最新归一化倍率 |
 | `GET /api/changes?station=` | 某站变更事件流 |
 | `GET /api/probes?station=` | 某站探测结果（含 markup）|
 | `GET /api/matrix?model=` | 跨站有效 USD/1M 矩阵（不可派生行带 sentinel 标签）|
 | `GET /api/audit` | 审计日志 |
+
+Prometheus 指标：`transitmonitor_input_usd_per_1m{station,group,model}`、`transitmonitor_output_usd_per_1m{...}`、`transitmonitor_probe_markup_pct{station,model}`（excluded/sentinel 行跳过）。
 
 ## 5. 站点配置
 ```yaml

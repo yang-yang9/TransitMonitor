@@ -32,7 +32,12 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r := chi.NewRouter()
 	r.Use(s.authMiddleware)
 	r.Get("/healthz", s.healthz)
+	r.Get("/metrics", s.metricsHandler)
 	r.Get("/", s.overviewHTML)
+	r.Get("/changes", s.changesHTML)
+	r.Get("/probes", s.probesHTML)
+	r.Get("/matrix", s.matrixHTML)
+	r.Get("/audit", s.auditHTML)
 	r.Get("/api/stations", s.stationsJSON)
 	r.Get("/api/ratios", s.ratiosJSON)
 	r.Get("/api/changes", s.changesJSON)
@@ -62,7 +67,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" { // healthz bypasses auth (for healthchecks)
+		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" { // healthz + metrics bypass auth (for healthchecks / prom scrape)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -192,7 +197,7 @@ const overviewTpl = `<!doctype html><html><head><meta charset="utf-8">
 <style>body{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:2rem;color:#222}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:4px 8px}a{color:#0366d6}</style>
 </head><body>
 <h1>TransitMonitor</h1>
-<p>中转站倍率监控 · <a href="/api/stations">/api/stations</a> · <a href="/api/matrix">/api/matrix</a> · <a href="/api/audit">/api/audit</a> · <a href="/healthz">/healthz</a></p>
+<p>中转站倍率监控 · pages: <a href="/matrix">matrix</a> · <a href="/changes">changes</a> · <a href="/probes">probes</a> · <a href="/audit">audit</a> · API: <a href="/api/stations">/api/*</a> · <a href="/metrics">/metrics</a> (Prometheus) · <a href="/healthz">/healthz</a></p>
 <h2>Stations</h2>
 <table><tr><th>id</th><th>kind</th><th>base_url</th></tr>{{range .Stations}}
 <tr><td>{{.ID}}</td><td>{{.Kind}}</td><td>{{.BaseURL}}</td></tr>{{end}}</table>
