@@ -49,6 +49,15 @@ func (s *Scheduler) SetClock(f func() time.Time) { s.Now = f }
 // SetLogger injects a logger.
 func (s *Scheduler) SetLogger(l *slog.Logger) { s.Logger = l }
 
+// logger returns the configured logger or the default (nil-safe, so a Scheduler
+// constructed without New() — e.g. in tests — does not panic on logging).
+func (s *Scheduler) logger() *slog.Logger {
+	if s.Logger == nil {
+		return slog.Default()
+	}
+	return s.Logger
+}
+
 // SetRetention overrides the retention windows (days).
 func (s *Scheduler) SetRetention(snapshotDays, obsDays int) {
 	s.snapshotRetentionDays = snapshotDays
@@ -113,14 +122,14 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs []domain.RatioObservation) {
 	pres, perr := s.Prober.Run(ctx, st, obs)
 	if perr != nil {
-		s.Logger.Error("probe", "station", st.ID, "err", perr)
+		s.logger().Error("probe", "station", st.ID, "err", perr)
 		return
 	}
 	if pres.Error == "deduped" {
 		return // within the dedupe window — not a real probe
 	}
 	if err := s.Store.InsertProbeResult(ctx, pres); err != nil {
-		s.Logger.Error("probe store", "station", st.ID, "err", err)
+		s.logger().Error("probe store", "station", st.ID, "err", err)
 	}
 	_ = s.Store.InsertAuditLog(ctx, "probe", "probe.run", st.ID,
 		fmt.Sprintf("model=%s tokens=%d/%d markup=%.2f%% cost_usd=%.6f declared_unavailable=%v error=%s",
@@ -160,7 +169,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 
 func (s *Scheduler) pollLoop(ctx context.Context, st domain.Station, interval time.Duration) {
 	if err := s.PollOnce(ctx, st.ID); err != nil && ctx.Err() == nil {
-		s.Logger.Error("poll", "station", st.ID, "err", err)
+		s.logger().Error("poll", "station", st.ID, "err", err)
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -170,7 +179,7 @@ func (s *Scheduler) pollLoop(ctx context.Context, st domain.Station, interval ti
 			return
 		case <-ticker.C:
 			if err := s.PollOnce(ctx, st.ID); err != nil && ctx.Err() == nil {
-				s.Logger.Error("poll", "station", st.ID, "err", err)
+				s.logger().Error("poll", "station", st.ID, "err", err)
 			}
 		}
 	}
@@ -193,8 +202,8 @@ func (s *Scheduler) retentionLoop(ctx context.Context) {
 func (s *Scheduler) runRetention(ctx context.Context) {
 	now := s.Now()
 	if err := s.Store.DownsampleAndRetain(ctx, now, s.snapshotRetentionDays, s.obsRetentionDays); err != nil {
-		s.Logger.Error("retention", "err", err)
+		s.logger().Error("retention", "err", err)
 		return
 	}
-	s.Logger.Info("retention done", "snap_days", s.snapshotRetentionDays, "obs_days", s.obsRetentionDays)
+	s.logger().Info("retention done", "snap_days", s.snapshotRetentionDays, "obs_days", s.obsRetentionDays)
 }
