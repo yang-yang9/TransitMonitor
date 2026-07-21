@@ -28,8 +28,9 @@ type mockCfg struct {
 	billingStatus  int          // 0 → 200 (if billing!=nil) ; override for 404/401
 	channels       []availableChannel
 	channelsStatus int
-	apiKey         string // expected bearer for billing
-	jwt            string // expected bearer for channels
+	models         []string // /v1/models response (sk-key)
+	apiKey         string   // expected bearer for billing
+	jwt            string   // expected bearer for channels
 	group          string
 }
 
@@ -61,6 +62,17 @@ func startMock(t *testing.T, cfg mockCfg) (*httptest.Server, *Adapter) {
 			return
 		}
 		writeJSON(w, 200, channelsAvailableResp{Success: true, Data: cfg.channels})
+	})
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.apiKey == "" || r.Header.Get("Authorization") != "Bearer "+cfg.apiKey {
+			writeJSON(w, 401, map[string]any{"error": "auth"})
+			return
+		}
+		data := make([]modelEntry, 0, len(cfg.models))
+		for _, id := range cfg.models {
+			data = append(data, modelEntry{ID: id})
+		}
+		writeJSON(w, 200, modelsListResp{Object: "list", Data: data})
 	})
 	srv := httptest.NewServer(mux)
 	a := New("s1", srv.URL, cfg.apiKey, cfg.jwt, "", cfg.group, srv.Client())

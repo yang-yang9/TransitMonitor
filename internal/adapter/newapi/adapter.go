@@ -223,7 +223,7 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 			return snap, nil, err
 		}
 		data.TopGroupRatio = pr.GroupRatio
-		data.Models = a.modelsFromPricing(pr.Data, caps.SelfUseMode)
+		data.Models = a.modelsFromPricing(pr.Data, caps.SelfUseMode, pr.GroupRatio)
 	default:
 		// No ratio source at all (e.g. pricing auth-gated + ratio_config off).
 		return snap, nil, fmt.Errorf("no ratio source available for station %s", a.StationID)
@@ -254,7 +254,7 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 	return snap, obs, nil
 }
 
-func (a *Adapter) modelsFromPricing(items []pricingItem, selfUse bool) []normalize.NewAPIModel {
+func (a *Adapter) modelsFromPricing(items []pricingItem, selfUse bool, topGroupRatio map[string]float64) []normalize.NewAPIModel {
 	out := make([]normalize.NewAPIModel, 0, len(items))
 	for _, p := range items {
 		// /api/pricing does not expose whether a model's ratio is configured vs
@@ -262,7 +262,7 @@ func (a *Adapter) modelsFromPricing(items []pricingItem, selfUse bool) []normali
 		// sentinel (unconfigured); confirming a real 37.5 would need
 		// /api/ratio_config or /api/option (typically unavailable here).
 		known := !(selfUse && p.ModelRatio == normalize.SelfUseSentinelRatio)
-		m := normalize.NewAPIModel{
+		base := normalize.NewAPIModel{
 			Name: p.ModelName, QuotaType: p.QuotaType,
 			ModelRatio: p.ModelRatio, ModelPrice: p.ModelPrice,
 			CacheRatio: p.CacheRatio, CreateCacheRatio: p.CreateCacheRatio,
@@ -270,11 +270,58 @@ func (a *Adapter) modelsFromPricing(items []pricingItem, selfUse bool) []normali
 		}
 		if p.CompletionRatio != 0 { // 0 → absent → normalize infers 1.0
 			cr := p.CompletionRatio
-			m.CompletionRatio = &cr
+			base.CompletionRatio = &cr
 		}
-		out = append(out, m)
+		// Group=="*" → one observation per group the model is enabled for
+		// (intersected with group_ratio), so default/vip prices are captured
+		// separately. Any other Group → observe just that group.
+		for _, g := range a.groupsFor(p.EnableGroup, topGroupRatio) {
+			m := base
+			m.Group = g
+			out = append(out, m)
+		}
 	}
 	return out
+}
+
+// groupsFor returns the groups to emit observations for. With a.Group set (and
+// not "*"), it is just that group. With "*", it expands across enable_groups ∩
+// group_ratio (or all group_ratio keys if enable_groups contains "all"); falls
+// back to "default" when nothing is known.
+func (a *Adapter) groupsFor(enable []string, topGroupRatio map[string]float64) []string {
+	if a.Group != "" && a.Group != "*" {
+		return []string{a.Group}
+	}
+	hasAll := false
+	for _, g := range enable {
+		if g == "all" {
+			hasAll = true
+			break
+		}
+	}
+	if hasAll {
+		out := make([]string, 0, len(topGroupRatio))
+		for g := range topGroupRatio {
+			out = append(out, g)
+		}
+		if len(out) == 0 {
+			return []string{"default"}
+		}
+		return out
+	}
+	var hit []string
+	for _, g := range enable {
+		if _, ok := topGroupRatio[g]; ok {
+			hit = append(hit, g)
+		}
+	}
+	if len(hit) > 0 {
+		return hit
+	}
+	if len(enable) > 0 {
+		return enable // station-named groups absent from group_ratio → resolve to 1.0
+	}
+	return []string{"default"}
 }
 
 func (a *Adapter) modelsFromMaps(d ratioConfigData) []normalize.NewAPIModel {

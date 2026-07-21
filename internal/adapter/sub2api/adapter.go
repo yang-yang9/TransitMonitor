@@ -192,6 +192,18 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 			}
 		}
 	}
+	// Fallback: if channels gave no models, use /v1/models + vendored LiteLLM
+	// base prices so USD/1M is still derivable (effective multiplier from billing).
+	if len(data.Models) == 0 && a.APIKey != "" {
+		if status, body, err := a.doGet(ctx, "/v1/models", a.APIKey); err == nil && status == 200 {
+			snap.RawPayloads["/v1/models"] = body
+			snap.EndpointsUsed = append(snap.EndpointsUsed, "/v1/models")
+			var ml modelsListResp
+			if json.Unmarshal(body, &ml) == nil {
+				data.Models = a.modelsFromLiteLLM(ml.Data, effective, peakInfo)
+			}
+		}
+	}
 	if caps.HasBilling || caps.SimpleMode {
 		snap.EndpointsUsed = append([]string{src}, snap.EndpointsUsed...)
 	}
