@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
+	"os"
 	"strings"
 
 	"transitmonitor/internal/domain"
@@ -67,6 +68,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// PUBLIC mode: skip auth entirely (for demo / reverse-proxy-fronted deployments).
+		// Set TRANSMONITOR_DASHBOARD_PUBLIC=1. Use only behind a reverse proxy or on a trusted network.
+		if os.Getenv("TRANSMONITOR_DASHBOARD_PUBLIC") == "1" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" { // healthz + metrics bypass auth (for healthchecks / prom scrape)
 			next.ServeHTTP(w, r)
 			return

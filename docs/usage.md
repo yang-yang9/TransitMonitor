@@ -43,6 +43,7 @@ stations: [ ... ]   # 见 §5
 | `TRANSMONITOR_DB_PATH` | SQLite 路径 | `transitmonitor.db` |
 | `TRANSMONITOR_DASHBOARD_ADDR` | 监听地址 | `127.0.0.1:7421`（容器内为 `0.0.0.0:7421`）|
 | `TRANSMONITOR_DASHBOARD_TOKEN` | 非 localhost 访问所需 bearer token | 空（仅 localhost）|
+| `TRANSMONITOR_DASHBOARD_PUBLIC` | 设为 `1` 则**免鉴权**（demo / 反代前置；仅用于可信网络） | 空 |
 | `TRANSMONITOR_ENCRYPTION_KEY` | 凭据静态加密密钥（设了则把各站凭据加密入库） | 空 |
 | `TRANSMONITOR_LOG_LEVEL` | `debug\|info\|warn\|error` | `info` |
 
