@@ -5,10 +5,11 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
-	"html/template"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"transitmonitor/internal/domain"
 	"transitmonitor/internal/store"
@@ -22,14 +23,12 @@ type Server struct {
 	store    *store.Store
 	token    string
 	mux      *chi.Mux
-	tmpl     *template.Template
 	httpSrv  *http.Server
 }
 
 // New constructs a dashboard server. token=="" means localhost-only.
 func New(stations []domain.Station, st *store.Store, token string) *Server {
 	s := &Server{stations: stations, store: st, token: token}
-	s.tmpl = template.Must(template.New("overview").Parse(overviewTpl))
 	r := chi.NewRouter()
 	r.Use(s.authMiddleware)
 	r.Get("/healthz", s.healthz)
@@ -68,19 +67,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// PUBLIC mode: skip auth entirely (for demo / reverse-proxy-fronted deployments).
-		// Set TRANSMONITOR_DASHBOARD_PUBLIC=1. Use only behind a reverse proxy or on a trusted network.
 		if os.Getenv("TRANSMONITOR_DASHBOARD_PUBLIC") == "1" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" { // healthz + metrics bypass auth (for healthchecks / prom scrape)
+		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
 			next.ServeHTTP(w, r)
 			return
 		}
 		if s.token == "" {
 			if !isLocal(r.RemoteAddr) {
-				http.Error(w, "localhost only (set dashboard.token to allow remote)", http.StatusUnauthorized)
+				http.Error(w, "localhost only (set dashboard.token or TRANSMONITOR_DASHBOARD_PUBLIC=1)", http.StatusUnauthorized)
 				return
 			}
 		} else if r.Header.Get("Authorization") != "Bearer "+s.token {
@@ -199,25 +196,46 @@ func (s *Server) matrixJSON(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, cells)
 }
 
-const overviewTpl = `<!doctype html><html><head><meta charset="utf-8">
-<title>TransitMonitor</title>
-<style>body{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:2rem;color:#222}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:4px 8px}a{color:#0366d6}</style>
-</head><body>
-<h1>TransitMonitor</h1>
-<p>中转站倍率监控 · pages: <a href="/matrix">matrix</a> · <a href="/changes">changes</a> · <a href="/probes">probes</a> · <a href="/audit">audit</a> · API: <a href="/api/stations">/api/*</a> · <a href="/metrics">/metrics</a> (Prometheus) · <a href="/healthz">/healthz</a></p>
-<h2>Stations</h2>
-<table><tr><th>id</th><th>kind</th><th>base_url</th></tr>{{range .Stations}}
-<tr><td>{{.ID}}</td><td>{{.Kind}}</td><td>{{.BaseURL}}</td></tr>{{end}}</table>
-</body></html>`
-
-func (s *Server) overviewHTML(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	type row struct{ ID, Kind, BaseURL string }
-	data := struct{ Stations []row }{}
+// overviewHTML renders station cards + quick links.
+func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var b strings.Builder
+	b.WriteString(`<h1>Overview</h1><p class="sub">中转站倍率监控 · normalized effective USD/1M token · `)
+	b.WriteString(`<a class="btn" href="/matrix">跨站对比 →</a></p>`)
+	b.WriteString(`<h2>Stations</h2><div class="grid">`)
 	for _, st := range s.stations {
-		data.Stations = append(data.Stations, row{ID: st.ID, Kind: string(st.Kind), BaseURL: st.BaseURL})
+		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
+		n := len(obs)
+		var last time.Time
+		for _, o := range obs {
+			if o.ObservedAt.After(last) {
+				last = o.ObservedAt
+			}
+		}
+		dot := "none"
+		if n > 0 {
+			dot = "ok"
+		}
+		lastStr := "—"
+		if !last.IsZero() {
+			lastStr = fmtTime(last)
+		}
+		b.WriteString(fmt.Sprintf(
+			`<div class="card stcard"><div class="kpi-label"><span class="dot-s %s"></span>%s</div>`+
+				`<div class="kpi">%d</div>`+
+				`<div class="meta"><span class="tag tag-pri">%s</span> %s<br>last scrape: %s · models: %d</div></div>`,
+			dot, esc(st.ID), n, esc(string(st.Kind)), esc(st.BaseURL), lastStr, n))
 	}
-	_ = s.tmpl.Execute(w, data)
+	b.WriteString(`</div>`)
+	b.WriteString(`<div class="card"><h2>Explore</h2><div class="kvs">`)
+	for _, it := range []navItem{
+		{"/matrix", "Cross-station matrix", ""}, {"/changes", "Changes", ""},
+		{"/probes", "Probes", ""}, {"/audit", "Audit", ""}, {"/metrics", "Metrics", ""},
+	} {
+		b.WriteString(fmt.Sprintf(`<a class="btn" href="%s">%s</a>`, it.H, it.Label))
+	}
+	b.WriteString(`</div></div>`)
+	writeHTMLShell(w, "Overview", "overview", b.String())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
