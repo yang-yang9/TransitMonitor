@@ -28,3 +28,4 @@ config.yaml            # real station config (copy from config.example.yaml)
 *.swp
 .DS_Store
 .tmp/
+.claude/worktrees/
