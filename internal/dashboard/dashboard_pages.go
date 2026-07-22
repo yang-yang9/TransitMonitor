@@ -54,7 +54,7 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(b.String()))
 }
 
-// --- server-rendered HTML pages ---
+// --- server-rendered HTML pages (i18n: zh / en via ?lang= or tm-lang cookie) ---
 
 func (s *Server) firstStation() string {
 	if len(s.stations) > 0 {
@@ -73,6 +73,7 @@ func sortedModels(set map[string]bool) []string {
 }
 
 func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
 	station := r.URL.Query().Get("station")
 	if station == "" {
 		station = s.firstStation()
@@ -88,16 +89,21 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 			`<span class="mono">` + esc(e.Old) + `</span>`,
 			`<span class="mono">` + esc(e.New) + `</span>`,
 			`<span class="num">` + fmtPct(e.DeltaPct) + `</span>`,
-			severityBadge(e.Severity),
+			severityBadge(lang, e.Severity),
 		})
 	}
-	body := `<h1>变更</h1><p class="sub">站点 <span class="tag tag-pri">` + esc(station) +
-		`</span> 的倍率/有效价变更（严重=红, 警告=黄）</p>` +
-		renderTable([]string{"时间", "分组", "模型", "字段", "旧值", "新值", "变化%", "严重度"}, rows)
-	writeHTMLShell(w, "变更 · "+station, "changes", body)
+	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
+	body := `<h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
+		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p>` +
+		renderTable(lang, []string{
+			t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.field"),
+			t(lang, "col.old"), t(lang, "col.new"), t(lang, "col.deltapct"), t(lang, "col.severity"),
+		}, rows)
+	writeHTMLShell(w, lang, t(lang, "title.changes")+" · "+station, "changes", body)
 }
 
 func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
 	station := r.URL.Query().Get("station")
 	if station == "" {
 		station = s.firstStation()
@@ -111,10 +117,6 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 		} else if p.MarkupPct < 0 {
 			mcls = "p-cheap"
 		}
-		errCell := esc(p.Error)
-		if p.Error == "" {
-			errCell = `<span class="badge b-ok">ok</span>`
-		}
 		rows = append(rows, []string{
 			`<span class="mono">` + fmtTime(p.ObservedAt) + `</span>`,
 			`<span class="mono">` + esc(p.Model) + `</span>`,
@@ -123,16 +125,22 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 			`<span class="num mono">` + fmtUSD(p.MeasuredUSDPer1M) + `</span>`,
 			fmt.Sprintf(`<span class="num %s">%s</span>`, mcls, fmtPct(p.MarkupPct)),
 			`<span class="num mono">` + fmtUSD(p.CostUSD) + `</span>`,
-			errCell,
+			statusBadge(lang, p.Error),
 		})
 	}
-	body := `<h1>真实成本探测</h1><p class="sub">站点 <span class="tag tag-pri">` + esc(station) +
-		`</span> · 加价% = 真实(探测) vs 声明有效价（<span class="pcell p-high">红=暗中加价</span> / <span class="pcell p-cheap">绿=折扣</span>）</p>` +
-		renderTable([]string{"时间", "模型", "token 入/出", "声明 $/M", "实测 $/M", "加价%", "成本 $", "状态"}, rows)
-	writeHTMLShell(w, "探测 · "+station, "probes", body)
+	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
+	body := `<h1>` + t(lang, "title.probes") + `</h1><p class="sub">` +
+		fmt.Sprintf(t(lang, "sub.probes"), stag) + `</p>` +
+		renderTable(lang, []string{
+			t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.tokinout"),
+			t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"),
+			t(lang, "col.cost"), t(lang, "col.status"),
+		}, rows)
+	writeHTMLShell(w, lang, t(lang, "title.probes")+" · "+station, "probes", body)
 }
 
 func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
 	model := r.URL.Query().Get("model")
 	ctx := r.Context()
 	type cell struct {
@@ -157,7 +165,7 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 		stCells[i] = m
 	}
 	models := sortedModels(modelSet)
-	cols := []string{"模型"}
+	cols := []string{t(lang, "col.model")}
 	for _, st := range s.stations {
 		cols = append(cols, esc(st.ID))
 	}
@@ -182,19 +190,20 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 			case !c.has:
 				row = append(row, `<span class="pcell p-na">—</span>`)
 			case c.sentinel != "":
-				row = append(row, statusBadge(c.sentinel))
+				row = append(row, statusBadge(lang, c.sentinel))
 			default:
 				row = append(row, fmt.Sprintf(`<span class="pcell %s">%s</span>`, priceColorClass(c.input, lo, hi), fmtUSD(c.input)))
 			}
 		}
 		rows = append(rows, row)
 	}
-	sub := `<p class="sub">有效 USD/1M token 跨站对比 · <span class="pcell p-cheap">绿=最便宜</span> · <span class="pcell p-high">红=最贵</span> · 徽章=不可派生</p>`
-	body := `<h1>跨站对比矩阵</h1>` + sub + renderTable(cols, rows)
-	writeHTMLShell(w, "矩阵", "matrix", body)
+	body := `<h1>` + t(lang, "title.matrix") + `</h1><p class="sub">` + t(lang, "sub.matrix") + `</p>` +
+		renderTable(lang, cols, rows)
+	writeHTMLShell(w, lang, t(lang, "title.matrix"), "matrix", body)
 }
 
 func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
 	entries, _ := s.store.ListAuditLogs(r.Context(), 100)
 	rows := make([][]string, 0, len(entries))
 	for _, e := range entries {
@@ -206,9 +215,9 @@ func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
 			esc(e.Detail),
 		})
 	}
-	body := `<h1>审计日志</h1><p class="sub">启动、探测、凭据持久化等动作记录</p>` +
-		renderTable([]string{"时间", "角色", "动作", "目标", "详情"}, rows)
-	writeHTMLShell(w, "审计", "audit", body)
+	body := `<h1>` + t(lang, "title.audit") + `</h1><p class="sub">` + t(lang, "sub.audit") + `</p>` +
+		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.actor"), t(lang, "col.action"), t(lang, "col.target"), t(lang, "col.detail")}, rows)
+	writeHTMLShell(w, lang, t(lang, "title.audit"), "audit", body)
 }
 
 func fmtTime(t time.Time) string {

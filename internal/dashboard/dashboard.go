@@ -198,11 +198,12 @@ func (s *Server) matrixJSON(w http.ResponseWriter, r *http.Request) {
 
 // overviewHTML renders station cards + quick links.
 func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
 	ctx := r.Context()
 	var b strings.Builder
-	b.WriteString(`<h1>概览</h1><p class="sub">中转站倍率监控 · 归一化有效 USD/1M token · `)
-	b.WriteString(`<a class="btn" href="/matrix">跨站对比 →</a></p>`)
-	b.WriteString(`<h2>站点</h2><div class="grid">`)
+	b.WriteString(`<h1>` + t(lang, "title.overview") + `</h1><p class="sub">` + t(lang, "sub.overview") +
+		`<a class="btn" href="/matrix">` + t(lang, "btn.matrix") + `</a></p>`)
+	b.WriteString(`<h2>` + t(lang, "section.stations") + `</h2><div class="grid">`)
 	for _, st := range s.stations {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
 		n := len(obs)
@@ -223,19 +224,16 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 		b.WriteString(fmt.Sprintf(
 			`<div class="card stcard"><div class="kpi-label"><span class="dot-s %s"></span>%s</div>`+
 				`<div class="kpi">%d</div>`+
-				`<div class="meta"><span class="tag tag-pri">%s</span> %s<br>最近抓取: %s · 模型: %d</div></div>`,
-			dot, esc(st.ID), n, esc(string(st.Kind)), esc(st.BaseURL), lastStr, n))
+				`<div class="meta"><span class="tag tag-pri">%s</span> %s<br>%s: %s · %s: %d</div></div>`,
+			dot, esc(st.ID), n, esc(string(st.Kind)), esc(st.BaseURL), t(lang, "meta.lastscrape"), lastStr, t(lang, "meta.models"), n))
 	}
 	b.WriteString(`</div>`)
-	b.WriteString(`<div class="card"><h2>导航</h2><div class="kvs">`)
-	for _, it := range []navItem{
-		{"/matrix", "跨站对比矩阵", ""}, {"/changes", "变更", ""},
-		{"/probes", "探测", ""}, {"/audit", "审计", ""}, {"/metrics", "指标", ""},
-	} {
-		b.WriteString(fmt.Sprintf(`<a class="btn" href="%s">%s</a>`, it.H, it.Label))
+	b.WriteString(`<div class="card"><h2>` + t(lang, "section.explore") + `</h2><div class="kvs">`)
+	for _, it := range navItems {
+		b.WriteString(fmt.Sprintf(`<a class="btn" href="%s">%s</a>`, it.H, t(lang, "nav."+it.Key)))
 	}
 	b.WriteString(`</div></div>`)
-	writeHTMLShell(w, "Overview", "overview", b.String())
+	writeHTMLShell(w, lang, t(lang, "title.overview"), "overview", b.String())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
