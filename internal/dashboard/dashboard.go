@@ -235,8 +235,8 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
 	ctx := r.Context()
 	var b strings.Builder
-	b.WriteString(`<h1>` + t(lang, "title.overview") + `</h1><p class="sub">` + t(lang, "sub.overview") +
-		`<a class="btn" href="/matrix">` + t(lang, "btn.matrix") + `</a></p>`)
+	b.WriteString(`<div class="page-hdr"><h1>` + t(lang, "title.overview") + `</h1><p class="sub">` + t(lang, "sub.overview") +
+		`<a class="btn" href="/matrix">` + t(lang, "btn.matrix") + `</a></p></div>`)
 	b.WriteString(`<h2>` + t(lang, "section.stations") + `</h2><div class="grid">`)
 	for _, st := range s.stationsList() {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
@@ -255,16 +255,27 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 		if !last.IsZero() {
 			lastStr = fmtTime(last)
 		}
+		name := st.Name
+		if name == "" {
+			name = st.ID
+		}
 		b.WriteString(fmt.Sprintf(
-			`<div class="card stcard"><div class="kpi-label"><span class="dot-s %s"></span>%s</div>`+
+			`<div class="card stcard">`+
+				`<div class="st-hdr"><span class="st-name">%s</span><span class="dot-s %s"></span></div>`+
+				`<div class="kpi-label">%s</div>`+
 				`<div class="kpi">%d</div>`+
-				`<div class="meta"><span class="tag tag-pri">%s</span> %s<br>%s: %s · %s: %d</div></div>`,
-			dot, esc(st.ID), n, esc(string(st.Kind)), esc(st.BaseURL), t(lang, "meta.lastscrape"), lastStr, t(lang, "meta.models"), n))
+				`<div class="meta">`+
+				`<span class="tag tag-pri">%s</span> <span class="tag">%s</span><br>`+
+				`%s: %s</div></div>`,
+			esc(name), dot,
+			t(lang, "meta.models"), n,
+			esc(string(st.Kind)), esc(st.ID),
+			t(lang, "meta.lastscrape"), lastStr))
 	}
 	b.WriteString(`</div>`)
-	b.WriteString(`<div class="card"><h2>` + t(lang, "section.explore") + `</h2><div class="kvs">`)
+	b.WriteString(`<div class="card" style="margin-top:.5rem"><h2>` + t(lang, "section.explore") + `</h2><div class="kvs">`)
 	for _, it := range navItems {
-		b.WriteString(fmt.Sprintf(`<a class="btn" href="%s">%s</a>`, it.H, t(lang, "nav."+it.Key)))
+		b.WriteString(fmt.Sprintf(`<a class="btn btn-sm" href="%s">%s</a>`, it.H, t(lang, "nav."+it.Key)))
 	}
 	b.WriteString(`</div></div>`)
 	writeHTMLShell(w, lang, t(lang, "title.overview"), "overview", b.String())

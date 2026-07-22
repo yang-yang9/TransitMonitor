@@ -93,8 +93,8 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
-	body := `<h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
-		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p>` +
+	body := `<div class="page-hdr"><h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
+		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p></div>` +
 		renderTable(lang, []string{
 			t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.field"),
 			t(lang, "col.old"), t(lang, "col.new"), t(lang, "col.deltapct"), t(lang, "col.severity"),
@@ -129,8 +129,8 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
-	body := `<h1>` + t(lang, "title.probes") + `</h1><p class="sub">` +
-		fmt.Sprintf(t(lang, "sub.probes"), stag) + `</p>` +
+	body := `<div class="page-hdr"><h1>` + t(lang, "title.probes") + `</h1><p class="sub">` +
+		fmt.Sprintf(t(lang, "sub.probes"), stag) + `</p></div>` +
 		renderTable(lang, []string{
 			t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.tokinout"),
 			t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"),
@@ -201,7 +201,7 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	body := `<h1>` + t(lang, "title.matrix") + `</h1><p class="sub">` + t(lang, "sub.matrix") + `</p>` +
+	body := `<div class="page-hdr"><h1>` + t(lang, "title.matrix") + `</h1><p class="sub">` + t(lang, "sub.matrix") + `</p></div>` +
 		renderTable(lang, cols, rows)
 	writeHTMLShell(w, lang, t(lang, "title.matrix"), "matrix", body)
 }
@@ -219,7 +219,7 @@ func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
 			esc(e.Detail),
 		})
 	}
-	body := `<h1>` + t(lang, "title.audit") + `</h1><p class="sub">` + t(lang, "sub.audit") + `</p>` +
+	body := `<div class="page-hdr"><h1>` + t(lang, "title.audit") + `</h1><p class="sub">` + t(lang, "sub.audit") + `</p></div>` +
 		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.actor"), t(lang, "col.action"), t(lang, "col.target"), t(lang, "col.detail")}, rows)
 	writeHTMLShell(w, lang, t(lang, "title.audit"), "audit", body)
 }

@@ -1,0 +1,13 @@
+groups:
+- name: transitmonitor
+  rules:
+  - alert: TransitMonitorPriceUp
+    expr: (max_over_time(transitmonitor_input_usd_per_1m[10m]) - min_over_time(transitmonitor_input_usd_per_1m[10m])) / min_over_time(transitmonitor_input_usd_per_1m[10m]) > 0.10
+    for: 2m
+    labels: {severity: warning}
+    annotations: {summary: "Price increased >10% in 10m ({{ $labels.station }} {{ $labels.model }})"}
+  - alert: TransitMonitorProbeMarkup
+    expr: transitmonitor_probe_markup_pct > 5
+    for: 5m
+    labels: {severity: critical}
+    annotations: {summary: "Hidden markup >5% detected ({{ $labels.station }} {{ $labels.model }})"}

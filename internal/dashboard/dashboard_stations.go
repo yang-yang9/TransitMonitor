@@ -47,20 +47,26 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 	sts := s.stationsList()
 	rows := make([][]string, 0, len(sts))
 	for _, st := range sts {
-		enabled := "✅"
+		enabled := `<span class="badge b-ok">` + t(lang, "form.enabled") + `</span>`
 		if !st.Enabled {
-			enabled = "—"
+			enabled = `<span class="badge b-muted">—</span>`
 		}
+<<<<<<< HEAD
 		edit := `<a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
 		del := `<button class="btn btn-danger btn-sm" onclick="tmDel('` + esc(st.ID) + `')">` + t(lang, "form.delete") + `</button>`
+=======
+		edit := `<a class="btn btn-sm btn-ghost" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
+		del := `<button class="btn btn-sm btn-danger" onclick="tmDel('` + esc(st.ID) + `')">` + t(lang, "form.delete") + `</button>`
+>>>>>>> worktree-ui-optimization
 		rows = append(rows, []string{
-			esc(st.ID), esc(st.Name),
+			`<span class="mono">` + esc(st.ID) + `</span>`, esc(st.Name),
 			`<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span>`,
-			esc(st.BaseURL), enabled, edit + " " + del,
+			`<span class="mono" style="font-size:.8rem">` + esc(st.BaseURL) + `</span>`, enabled,
+			`<div style="display:flex;gap:.4rem">` + edit + ` ` + del + `</div>`,
 		})
 	}
-	body := `<h1>` + t(lang, "title.stations") + `</h1>` +
-		`<p><a class="btn" href="/stations/new">+ ` + t(lang, "title.newstation") + `</a></p>` +
+	body := `<div class="page-hdr"><h1>` + t(lang, "title.stations") + `</h1>` +
+		`<p class="sub"><a class="btn" href="/stations/new">+ ` + t(lang, "title.newstation") + `</a></p></div>` +
 		renderTable(lang, []string{t(lang, "form.id"), t(lang, "form.name"), t(lang, "form.kind"), t(lang, "form.baseurl"), t(lang, "form.enabled"), ""}, rows) +
 		`<script>function tmDel(id){if(!confirm('` + t(lang, "form.confirm") + `'))return;fetch('/api/stations/'+id,{method:'DELETE'}).then(function(){location.reload();});}</script>`
 	writeHTMLShell(w, lang, t(lang, "title.stations"), "stations", body)
@@ -174,6 +180,7 @@ func stationForm(lang string, edit *domain.Station) string {
 		}
 		apiPH, patPH, jwtPH = t(lang, "form.keepblank"), t(lang, "form.keepblank"), t(lang, "form.keepblank")
 	}
+<<<<<<< HEAD
 	return `<div class="form-wrap"><h1>` + title + `</h1><p class="sub">` + t(lang, "form.id.auto") + `</p>
 <div class="card">
 <form id="stform" onsubmit="return tmSubmit('` + method + `','` + action + `')">
@@ -190,6 +197,26 @@ func stationForm(lang string, edit *domain.Station) string {
     <div class="field"><span class="field-label">` + t(lang, "form.enabled") + `</span><label class="toggle"><input type="checkbox" name="enabled" ` + checkedAttr + `><span class="slider"></span>` + t(lang, "form.enabled") + `</label></div>
   </div>
   <div class="btn-group" style="margin-top:1.2rem"><button class="btn" type="submit">` + submit + `</button><a class="btn btn-outline" href="/stations">←</a></div>
+=======
+	return `<div class="page-hdr"><h1>` + title + `</h1></div>
+<div class="card">
+<form id="stform" onsubmit="return tmSubmit('` + method + `','` + action + `')">
+  <div class="form-grid">
+    <label>` + t(lang, "form.id") + `<input name="id" ` + idRequired + ` value="` + esc(idVal) + `" placeholder="` + esc(idPH) + `" ` + idRO + `></label>
+    <label>` + t(lang, "form.name") + `<input name="name" required value="` + esc(nameVal) + `"></label>
+    <label class="full">` + t(lang, "form.baseurl") + `<input name="base_url" required value="` + esc(baseVal) + `" placeholder="https://relay.example.com"></label>
+    <label>` + t(lang, "form.kind") + `<select name="kind"><option value="newapi" ` + kindNew + `>newapi</option><option value="sub2api" ` + kindSub + `>sub2api</option></select></label>
+    <label>` + t(lang, "form.group") + `<input name="group" value="` + esc(groupVal) + `"></label>
+    <label>` + t(lang, "form.pollinterval") + `<input name="poll_interval" value="` + esc(pollVal) + `"></label>
+    <div></div>
+    <hr class="form-sep">
+    <label>` + t(lang, "form.apikey") + `<input name="api_key" value="` + esc(apiVal) + `" placeholder="` + apiPH + `"></label>
+    <label>` + t(lang, "form.pat") + `<input name="pat" value="` + esc(patVal) + `" placeholder="` + patPH + `"></label>
+    <label>` + t(lang, "form.jwt") + `<input name="jwt" value="` + esc(jwtVal) + `" placeholder="` + jwtPH + `"></label>
+    <div class="chk-wrap"><input type="checkbox" name="enabled" id="st-enabled" ` + checked + `><label for="st-enabled">` + t(lang, "form.enabled") + `</label></div>
+  </div>
+  <div class="form-actions"><button class="btn" type="submit">` + submit + `</button> <a class="btn btn-ghost" href="/stations">&larr; ` + t(lang, "title.stations") + `</a></div>
+>>>>>>> worktree-ui-optimization
 </form>
 </div>
 <script>

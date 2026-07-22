@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transitmonitor
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {app: transitmonitor}
+  template:
+    metadata:
+      labels: {app: transitmonitor}
+    spec:
+      containers:
+      - name: transitmonitor
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        ports: [{containerPort: 7421}]
+        env:
+        - {name: TRANSMONITOR_DASHBOARD_PUBLIC, value: "1"}
+        - {name: TRANSMONITOR_DASHBOARD_TOKEN, value: {{ .Values.dashboardToken | quote }}}
+        - {name: TRANSMONITOR_ENCRYPTION_KEY, value: {{ .Values.encryptionKey | quote }}}
+        volumeMounts:
+        - {name: config, mountPath: /config}
+        - {name: data, mountPath: /data}
+      volumes:
+      - {name: config, configMap: {name: transitmonitor-config}}
+      - {name: data, persistentVolumeClaim: {claimName: transitmonitor-data}}

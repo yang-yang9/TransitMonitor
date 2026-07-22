@@ -1,0 +1,5 @@
+apiVersion: v2
+name: transitmonitor
+description: TransitMonitor — 中转站倍率监控
+version: 0.1.0
+appVersion: "0.1.0"
