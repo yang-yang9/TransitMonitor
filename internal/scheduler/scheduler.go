@@ -300,6 +300,7 @@ func (s *Scheduler) startStationLocked(parent context.Context, st domain.Station
 func (s *Scheduler) pollLoop(ctx context.Context, st domain.Station, interval time.Duration) {
 	if err := s.PollOnce(ctx, st.ID); err != nil && ctx.Err() == nil {
 		s.logger().Error("poll", "station", st.ID, "err", err)
+		_ = s.Store.InsertAuditLog(ctx, "scheduler", "poll.error", st.ID, err.Error())
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -310,6 +311,7 @@ func (s *Scheduler) pollLoop(ctx context.Context, st domain.Station, interval ti
 		case <-ticker.C:
 			if err := s.PollOnce(ctx, st.ID); err != nil && ctx.Err() == nil {
 				s.logger().Error("poll", "station", st.ID, "err", err)
+				_ = s.Store.InsertAuditLog(ctx, "scheduler", "poll.error", st.ID, err.Error())
 			}
 		}
 	}
