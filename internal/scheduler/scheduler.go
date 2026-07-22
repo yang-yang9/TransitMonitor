@@ -40,6 +40,9 @@ type Scheduler struct {
 	cancels               map[string]context.CancelFunc
 	snapshotRetentionDays int
 	obsRetentionDays      int
+	cooldown              time.Duration
+	lastAlert             map[string]time.Time
+	alertMu               sync.Mutex
 }
 
 // New constructs a scheduler with defaults.
@@ -48,6 +51,8 @@ func New(stations []domain.Station, adapters map[string]adapter.Adapter, st *sto
 		stationList: stations, Adapters: adapters, Store: st, Rules: rules, Notifier: n,
 		DiffCfg: changedet.DefaultConfig(), Now: time.Now, Logger: slog.Default(),
 		cancels:               map[string]context.CancelFunc{},
+		cooldown:              30 * time.Minute,
+		lastAlert:             map[string]time.Time{},
 		snapshotRetentionDays: 7, obsRetentionDays: 30,
 	}
 }
@@ -70,12 +75,30 @@ func (s *Scheduler) SetEncKey(k []byte) { s.EncKey = k }
 // SetClient sets the HTTP client used to build adapters at runtime.
 func (s *Scheduler) SetClient(c *http.Client) { s.Client = c }
 
+// SetCooldown overrides the alert cooldown window (default 30m).
+func (s *Scheduler) SetCooldown(d time.Duration) { s.cooldown = d }
+
 // logger returns the configured logger or the default (nil-safe).
 func (s *Scheduler) logger() *slog.Logger {
 	if s.Logger == nil {
 		return slog.Default()
 	}
 	return s.Logger
+}
+
+// shouldFire checks if an alert should fire (cooldown dedup).
+func (s *Scheduler) shouldFire(ev alert.AlertEvent) bool {
+	if s.cooldown <= 0 {
+		return true
+	}
+	key := ev.Rule + "|" + ev.StationID + "|" + ev.Model
+	s.alertMu.Lock()
+	defer s.alertMu.Unlock()
+	if last, ok := s.lastAlert[key]; ok && s.Now().Sub(last) < s.cooldown {
+		return false
+	}
+	s.lastAlert[key] = s.Now()
+	return true
 }
 
 // Stations returns a snapshot of the current station list (thread-safe).
@@ -201,6 +224,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 	}
 	if s.Notifier != nil {
 		for _, ev := range alert.Evaluate(s.Rules, events, nil) {
+			if !s.shouldFire(ev) {
+				continue
+			}
 			sendErr := s.Notifier.Send(ctx, ev)
 			payload, _ := json.Marshal(ev.Payload)
 			_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
@@ -229,6 +255,9 @@ func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs 
 			pres.Model, pres.TokensIn, pres.TokensOut, pres.MarkupPct, pres.CostUSD, pres.DeclaredUnavailable, pres.Error))
 	if s.Notifier != nil {
 		for _, ev := range alert.Evaluate(s.Rules, nil, []domain.ProbeResult{pres}) {
+			if !s.shouldFire(ev) {
+				continue
+			}
 			sendErr := s.Notifier.Send(ctx, ev)
 			payload, _ := json.Marshal(ev.Payload)
 			_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))

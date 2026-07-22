@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -122,7 +123,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 	info := `<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span> ` + esc(st.BaseURL) +
 		` <a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
 	body := `<div class="page-hdr"><h1>` + esc(st.Name) + `</h1><p class="sub">` + info + `</p></div>` +
-		`<h2>` + t(lang, "section.ratios") + `</h2>` + renderTable(lang, []string{t(lang, "col.group"), t(lang, "col.model"), "input $/M", "output $/M", t(lang, "col.status")}, ratioRows) +
+		`<h2>` + t(lang, "section.ratios") + `</h2>` + renderTable(lang, []string{t(lang, "col.group"), t(lang, "col.model"), "input $/M", "output $/M", "trend", t(lang, "col.status")}, ratioRows) +
 		`<h2>` + t(lang, "title.changes") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, changeRows) +
 		`<h2>` + t(lang, "title.probes") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probeRows)
 	writeHTMLShell(w, lang, esc(st.Name), "stations", body)
@@ -328,4 +329,32 @@ func (s *Server) stationsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
+}
+
+// sparklineSVG renders a mini SVG line chart from values (for the station detail page).
+func sparklineSVG(vals []float64, w, h int) string {
+	if len(vals) < 2 || h <= 0 || w <= 0 {
+		return ""
+	}
+	lo, hi := vals[0], vals[0]
+	for _, v := range vals {
+		if v < lo {
+			lo = v
+		}
+		if v > hi {
+			hi = v
+		}
+	}
+	rng := hi - lo
+	if rng < 1e-9 {
+		rng = 1
+	}
+	var pts []string
+	n := len(vals)
+	for i, v := range vals {
+		x := float64(i) / float64(n-1) * float64(w)
+		y := float64(h) - (v-lo)/rng*float64(h)
+		pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, y))
+	}
+	return fmt.Sprintf("<svg width=\"%d\" height=\"%d\" xmlns=\"http://www.w3.org/2000/svg\"><polyline points=\"%s\" fill=\"none\" stroke=\"var(--primary)\" stroke-width=\"1.5\"/></svg>", w, h, strings.Join(pts, " "))
 }

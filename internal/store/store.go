@@ -478,3 +478,31 @@ func (s *Store) ListAlertEvents(ctx context.Context, limit int) ([]AlertEventRow
 	}
 	return out, rows.Err()
 }
+
+// ObservationHistory returns the last N observations for a (station, model) for sparkline rendering.
+func (s *Store) ObservationHistory(ctx context.Context, stationID, modelName string, limit int) ([]domain.RatioObservation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT station_id, group_name, model_name, native_ratio, native_ratio_kind, quota_type,
+		input_usd_per_1m, output_usd_per_1m, cache_read_usd_per_1m, cache_write_usd_per_1m,
+		fixed_price_usd, completion_ratio, peak_info, declared_unavailable, sentinel, note,
+		observed_at, source_endpoint
+		FROM ratio_observations WHERE station_id=? AND model_name=? ORDER BY observed_at DESC LIMIT ?`, stationID, modelName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.RatioObservation
+	for rows.Next() {
+		var o domain.RatioObservation
+		var du int
+		var ts int64
+		if err := rows.Scan(&o.StationID, &o.GroupName, &o.ModelName, &o.NativeRatio, &o.NativeRatioKind, &o.QuotaType,
+			&o.InputUSDPer1M, &o.OutputUSDPer1M, &o.CacheReadUSDPer1M, &o.CacheWriteUSDPer1M,
+			&o.FixedPriceUSD, &o.CompletionRatio, &o.PeakInfo, &du, &o.Sentinel, &o.Note, &ts, &o.SourceEndpoint); err != nil {
+			return nil, err
+		}
+		o.DeclaredUnavailable = du == 1
+		o.ObservedAt = time.Unix(ts, 0).UTC()
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}

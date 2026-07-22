@@ -146,6 +146,21 @@ func main() {
 		}
 	}()
 
+	hupCh := make(chan os.Signal, 1)
+	signal.Notify(hupCh, syscall.SIGHUP)
+	go func() {
+		for range hupCh {
+			logger.Info("SIGHUP received, reloading config")
+			if cfg2, err := config.Load(configPath); err == nil {
+				for _, st := range cfg2.Stations {
+					_ = sched.AddStation(st)
+				}
+				logger.Info("config reloaded", "stations", len(cfg2.Stations))
+			} else {
+				logger.Error("config reload failed", "err", err)
+			}
+		}
+	}()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	logger.Info("TransitMonitor running", "stations", len(stations), "version", version)
