@@ -42,6 +42,7 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Get("/audit", s.auditHTML)
 	r.Get("/alerts", s.alertsHTML)
 	r.Get("/stations", s.stationsPage)
+	r.Get("/stations/{id}", s.stationDetailHTML)
 	r.Get("/stations/new", s.stationFormHTML)
 	r.Get("/stations/{id}/edit", s.stationEditHTML)
 	r.Get("/api/stations", s.stationsJSON)

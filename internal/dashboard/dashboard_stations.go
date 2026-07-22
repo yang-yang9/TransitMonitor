@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -63,6 +64,67 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 		renderTable(lang, []string{t(lang, "form.id"), t(lang, "form.name"), t(lang, "form.kind"), t(lang, "form.baseurl"), t(lang, "form.enabled"), ""}, rows) +
 		`<script>function tmDel(id){if(!confirm('` + t(lang, "form.confirm") + `'))return;fetch('/api/stations/'+id,{method:'DELETE'}).then(function(){location.reload();});}</script>`
 	writeHTMLShell(w, lang, t(lang, "title.stations"), "stations", body)
+}
+
+// GET /stations/{id} — station detail: ratios + recent changes + probes.
+func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
+	id := chi.URLParam(r, "id")
+	st, ok := s.findStation(id)
+	if !ok {
+		http.Error(w, "station not found", http.StatusNotFound)
+		return
+	}
+	ctx := r.Context()
+	// ratios
+	obs, _ := s.store.LatestRatioObservations(ctx, id)
+	ratioRows := make([][]string, 0, len(obs))
+	for _, o := range obs {
+		ratioRows = append(ratioRows, []string{
+			esc(o.GroupName), `<span class="mono">` + esc(o.ModelName) + `</span>`,
+			`<span class="num mono">` + fmtUSD(o.InputUSDPer1M) + `</span>`,
+			`<span class="num mono">` + fmtUSD(o.OutputUSDPer1M) + `</span>`,
+			statusBadge(lang, o.Sentinel),
+		})
+	}
+	// changes
+	evs, _ := s.store.ListChangeEvents(ctx, id, 20)
+	changeRows := make([][]string, 0, len(evs))
+	for _, e := range evs {
+		changeRows = append(changeRows, []string{
+			`<span class="mono">` + fmtTime(e.ObservedAt) + `</span>`,
+			`<span class="mono">` + esc(e.Model) + `</span>`,
+			`<span class="tag">` + esc(e.Field) + `</span>`,
+			`<span class="num">` + fmtPct(e.DeltaPct) + `</span>`,
+			severityBadge(lang, e.Severity),
+		})
+	}
+	// probes
+	prs, _ := s.store.ListProbeResults(ctx, id, 20)
+	probeRows := make([][]string, 0, len(prs))
+	for _, p := range prs {
+		mcls := "p-mid"
+		if p.MarkupPct > 0 {
+			mcls = "p-high"
+		} else if p.MarkupPct < 0 {
+			mcls = "p-cheap"
+		}
+		probeRows = append(probeRows, []string{
+			`<span class="mono">` + fmtTime(p.ObservedAt) + `</span>`,
+			`<span class="mono">` + esc(p.Model) + `</span>`,
+			`<span class="num mono">` + fmtUSD(p.DeclaredEffectiveUSDPer1M) + `</span>`,
+			`<span class="num mono">` + fmtUSD(p.MeasuredUSDPer1M) + `</span>`,
+			fmt.Sprintf(`<span class="num %s">%s</span>`, mcls, fmtPct(p.MarkupPct)),
+			statusBadge(lang, p.Error),
+		})
+	}
+	info := `<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span> ` + esc(st.BaseURL) +
+		` <a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
+	body := `<h1>` + esc(st.Name) + `</h1><p class="sub">` + info + `</p>` +
+		`<h2>` + t(lang, "section.ratios") + `</h2>` + renderTable(lang, []string{t(lang, "col.group"), t(lang, "col.model"), "input $/M", "output $/M", t(lang, "col.status")}, ratioRows) +
+		`<h2>` + t(lang, "title.changes") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, changeRows) +
+		`<h2>` + t(lang, "title.probes") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probeRows)
+	writeHTMLShell(w, lang, esc(st.Name), "stations", body)
 }
 
 // GET /stations/new — add-station form.
