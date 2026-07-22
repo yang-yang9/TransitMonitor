@@ -88,11 +88,12 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;padding:1.2rem}
 type navItem struct{ H, Label, Key string }
 
 var navItems = []navItem{
-	{"/", "", "overview"}, // Label filled per-lang in pageShell
+	{"/", "", "overview"},
 	{"/matrix", "", "matrix"},
 	{"/changes", "", "changes"},
 	{"/probes", "", "probes"},
 	{"/audit", "", "audit"},
+	{"/stations", "", "stations"},
 	{"/metrics", "", "metrics"},
 }
 

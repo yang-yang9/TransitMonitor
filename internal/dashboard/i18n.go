@@ -26,6 +26,12 @@ var trans = map[string]map[string]string{
 		"col.actor": "角色", "col.action": "动作", "col.target": "目标", "col.detail": "详情",
 		"badge.critical": "严重", "badge.warning": "警告", "badge.info": "提示", "badge.ok": "正常",
 		"empty": "暂无数据", "theme": "主题",
+		"nav.stations":   "站点管理",
+		"title.stations": "站点管理", "title.newstation": "添加站点",
+		"form.id": "站点 ID", "form.name": "名称", "form.baseurl": "Base URL", "form.kind": "类型",
+		"form.apikey": "API Key (sk-)", "form.pat": "PAT（可选）", "form.jwt": "JWT（可选，sub2api）", "form.group": "分组",
+		"form.pollinterval": "轮询间隔", "form.enabled": "启用", "form.add": "添加", "form.delete": "删除",
+		"form.confirm": "确认删除该站点？", "form.empty": "（暂无站点，点「添加站点」新增）",
 	},
 	"en": {
 		"nav.overview": "Overview", "nav.matrix": "Matrix", "nav.changes": "Changes",
@@ -47,6 +53,12 @@ var trans = map[string]map[string]string{
 		"col.actor": "actor", "col.action": "action", "col.target": "target", "col.detail": "detail",
 		"badge.critical": "critical", "badge.warning": "warning", "badge.info": "info", "badge.ok": "ok",
 		"empty": "No data", "theme": "Theme",
+		"nav.stations":   "Stations",
+		"title.stations": "Stations", "title.newstation": "Add station",
+		"form.id": "Station ID", "form.name": "Name", "form.baseurl": "Base URL", "form.kind": "Kind",
+		"form.apikey": "API Key (sk-)", "form.pat": "PAT (optional)", "form.jwt": "JWT (optional, sub2api)", "form.group": "Group",
+		"form.pollinterval": "Poll interval", "form.enabled": "Enabled", "form.add": "Add", "form.delete": "Delete",
+		"form.confirm": "Delete this station?", "form.empty": "(no stations yet — click Add station)",
 	},
 }
 

@@ -22,6 +22,7 @@ type Server struct {
 	stations []domain.Station
 	store    *store.Store
 	token    string
+	mgr      StationManager
 	mux      *chi.Mux
 	httpSrv  *http.Server
 }
@@ -38,12 +39,17 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Get("/probes", s.probesHTML)
 	r.Get("/matrix", s.matrixHTML)
 	r.Get("/audit", s.auditHTML)
+	r.Get("/stations", s.stationsPage)
+	r.Get("/stations/new", s.stationFormHTML)
 	r.Get("/api/stations", s.stationsJSON)
 	r.Get("/api/ratios", s.ratiosJSON)
 	r.Get("/api/changes", s.changesJSON)
 	r.Get("/api/probes", s.probesJSON)
 	r.Get("/api/matrix", s.matrixJSON)
 	r.Get("/api/audit", s.auditJSON)
+	r.Post("/api/stations", s.stationsCreate)
+	r.Put("/api/stations/{id}", s.stationsUpsert)
+	r.Delete("/api/stations/{id}", s.stationsDelete)
 	s.mux = r
 	return s
 }
@@ -109,7 +115,7 @@ func (s *Server) stationsJSON(w http.ResponseWriter, r *http.Request) {
 		Enabled bool   `json:"enabled"`
 	}
 	out := make([]stationOut, 0, len(s.stations))
-	for _, st := range s.stations {
+	for _, st := range s.stationsList() {
 		out = append(out, stationOut{ID: st.ID, Name: st.Name, Kind: string(st.Kind), BaseURL: st.BaseURL, Enabled: st.Enabled})
 	}
 	writeJSON(w, 200, out)
@@ -177,7 +183,7 @@ type matrixCell struct {
 func (s *Server) matrixJSON(w http.ResponseWriter, r *http.Request) {
 	model := r.URL.Query().Get("model")
 	var cells []matrixCell
-	for _, st := range s.stations {
+	for _, st := range s.stationsList() {
 		obs, err := s.store.LatestRatioObservations(r.Context(), st.ID)
 		if err != nil {
 			continue
@@ -204,7 +210,7 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 	b.WriteString(`<h1>` + t(lang, "title.overview") + `</h1><p class="sub">` + t(lang, "sub.overview") +
 		`<a class="btn" href="/matrix">` + t(lang, "btn.matrix") + `</a></p>`)
 	b.WriteString(`<h2>` + t(lang, "section.stations") + `</h2><div class="grid">`)
-	for _, st := range s.stations {
+	for _, st := range s.stationsList() {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
 		n := len(obs)
 		var last time.Time

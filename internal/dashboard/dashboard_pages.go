@@ -19,7 +19,7 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	b.WriteString("# HELP transitmonitor_output_usd_per_1m Effective output USD per 1M tokens (normalized)\n")
 	b.WriteString("# TYPE transitmonitor_output_usd_per_1m gauge\n")
 	ctx := r.Context()
-	for _, st := range s.stations {
+	for _, st := range s.stationsList() {
 		obs, err := s.store.LatestRatioObservations(ctx, st.ID)
 		if err != nil {
 			continue
@@ -35,7 +35,7 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	b.WriteString("# HELP transitmonitor_probe_markup_pct Hidden markup (%) reconciled by the real-cost probe\n")
 	b.WriteString("# TYPE transitmonitor_probe_markup_pct gauge\n")
-	for _, st := range s.stations {
+	for _, st := range s.stationsList() {
 		prs, err := s.store.ListProbeResults(ctx, st.ID, 50)
 		if err != nil {
 			continue
@@ -150,7 +150,7 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	stCells := make([]map[string]cell, len(s.stations))
 	modelSet := map[string]bool{}
-	for i, st := range s.stations {
+	for i, st := range s.stationsList() {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
 		m := map[string]cell{}
 		for _, o := range obs {
@@ -166,13 +166,13 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	models := sortedModels(modelSet)
 	cols := []string{t(lang, "col.model")}
-	for _, st := range s.stations {
+	for _, st := range s.stationsList() {
 		cols = append(cols, esc(st.ID))
 	}
 	rows := make([][]string, 0, len(models))
 	for _, m := range models {
 		lo, hi := math.MaxFloat64, -math.MaxFloat64
-		for i := range s.stations {
+		for i := range s.stationsList() {
 			c := stCells[i][m]
 			if c.has && c.sentinel == "" {
 				if c.input < lo {
@@ -184,7 +184,7 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		row := []string{`<span class="mono">` + esc(m) + `</span>`}
-		for i := range s.stations {
+		for i := range s.stationsList() {
 			c := stCells[i][m]
 			switch {
 			case !c.has:

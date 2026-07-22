@@ -1,12 +1,14 @@
 // Package scheduler drives the per-station scrape→normalize→store→diff→alert
-// loop, the real-cost probe, and a daily retention/downsample job. It owns no
-// domain math; it composes adapter + store + changedet + alert + probe.
+// loop, the real-cost probe, a daily retention job, and runtime station
+// add/remove (StationManager). It owns no domain math; it composes adapter +
+// store + changedet + alert + probe.
 package scheduler
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -20,25 +22,31 @@ import (
 
 // Scheduler runs the monitoring loop for a set of stations.
 type Scheduler struct {
-	Stations []domain.Station
-	Adapters map[string]adapter.Adapter
-	Store    *store.Store
-	Rules    []alert.Rule
-	Notifier alert.Notifier
-	Prober   *probe.Prober
-	DiffCfg  changedet.Config
-	Now      func() time.Time
-	Logger   *slog.Logger
+	stationList []domain.Station
+	Adapters    map[string]adapter.Adapter
+	Store       *store.Store
+	Rules       []alert.Rule
+	Notifier    alert.Notifier
+	Prober      *probe.Prober
+	DiffCfg     changedet.Config
+	Now         func() time.Time
+	Logger      *slog.Logger
+	EncKey      []byte       // for at-rest credential persistence on AddStation
+	Client      *http.Client // for building adapters at runtime
 
-	snapshotRetentionDays int // default 7
-	obsRetentionDays      int // default 30
+	mu                    sync.Mutex
+	runCtx                context.Context
+	cancels               map[string]context.CancelFunc
+	snapshotRetentionDays int
+	obsRetentionDays      int
 }
 
 // New constructs a scheduler with defaults.
 func New(stations []domain.Station, adapters map[string]adapter.Adapter, st *store.Store, rules []alert.Rule, n alert.Notifier) *Scheduler {
 	return &Scheduler{
-		Stations: stations, Adapters: adapters, Store: st, Rules: rules, Notifier: n,
+		stationList: stations, Adapters: adapters, Store: st, Rules: rules, Notifier: n,
 		DiffCfg: changedet.DefaultConfig(), Now: time.Now, Logger: slog.Default(),
+		cancels:               map[string]context.CancelFunc{},
 		snapshotRetentionDays: 7, obsRetentionDays: 30,
 	}
 }
@@ -49,8 +57,19 @@ func (s *Scheduler) SetClock(f func() time.Time) { s.Now = f }
 // SetLogger injects a logger.
 func (s *Scheduler) SetLogger(l *slog.Logger) { s.Logger = l }
 
-// logger returns the configured logger or the default (nil-safe, so a Scheduler
-// constructed without New() — e.g. in tests — does not panic on logging).
+// SetRetention overrides the retention windows (days).
+func (s *Scheduler) SetRetention(snapshotDays, obsDays int) {
+	s.snapshotRetentionDays = snapshotDays
+	s.obsRetentionDays = obsDays
+}
+
+// SetEncKey sets the at-rest encryption key (for persisting added stations' creds).
+func (s *Scheduler) SetEncKey(k []byte) { s.EncKey = k }
+
+// SetClient sets the HTTP client used to build adapters at runtime.
+func (s *Scheduler) SetClient(c *http.Client) { s.Client = c }
+
+// logger returns the configured logger or the default (nil-safe).
 func (s *Scheduler) logger() *slog.Logger {
 	if s.Logger == nil {
 		return slog.Default()
@@ -58,16 +77,95 @@ func (s *Scheduler) logger() *slog.Logger {
 	return s.Logger
 }
 
-// SetRetention overrides the retention windows (days).
-func (s *Scheduler) SetRetention(snapshotDays, obsDays int) {
-	s.snapshotRetentionDays = snapshotDays
-	s.obsRetentionDays = obsDays
+// Stations returns a snapshot of the current station list (thread-safe).
+func (s *Scheduler) Stations() []domain.Station {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]domain.Station, len(s.stationList))
+	copy(out, s.stationList)
+	return out
+}
+
+// AddStation persists + builds an adapter + starts polling. Upserts by ID.
+// Implements dashboard.StationManager.
+func (s *Scheduler) AddStation(st domain.Station) error {
+	if s.runCtx == nil {
+		return fmt.Errorf("scheduler not running")
+	}
+	client := s.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	a, err := adapter.NewAdapter(st, client)
+	if err != nil {
+		return err
+	}
+	if s.EncKey != nil && s.Store != nil {
+		_ = s.Store.UpsertStation(s.runCtx, st, s.EncKey)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cancel, ok := s.cancels[st.ID]; ok {
+		cancel() // stop a previous poller for the same id
+	}
+	replaced := false
+	for i, x := range s.stationList {
+		if x.ID == st.ID {
+			s.stationList[i] = st
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		s.stationList = append(s.stationList, st)
+	}
+	s.Adapters[st.ID] = a
+	if st.Enabled {
+		s.startStationLocked(s.runCtx, st)
+	}
+	return nil
+}
+
+// RemoveStation stops the poller + removes the station + deletes it from the store.
+// Implements dashboard.StationManager.
+func (s *Scheduler) RemoveStation(id string) error {
+	if s.runCtx == nil {
+		return fmt.Errorf("scheduler not running")
+	}
+	s.mu.Lock()
+	if cancel, ok := s.cancels[id]; ok {
+		cancel()
+		delete(s.cancels, id)
+	}
+	for i, x := range s.stationList {
+		if x.ID == id {
+			s.stationList = append(s.stationList[:i], s.stationList[i+1:]...)
+			break
+		}
+	}
+	delete(s.Adapters, id)
+	s.mu.Unlock()
+	if s.EncKey != nil && s.Store != nil {
+		_ = s.Store.DeleteStation(s.runCtx, id)
+	}
+	return nil
 }
 
 // PollOnce runs one scrape→store→diff→alert cycle for a station.
 func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
-	a, ok := s.Adapters[stationID]
-	if !ok {
+	s.mu.Lock()
+	a := s.Adapters[stationID]
+	var stn domain.Station
+	found := false
+	for _, x := range s.stationList {
+		if x.ID == stationID {
+			stn = x
+			found = true
+			break
+		}
+	}
+	s.mu.Unlock()
+	if a == nil {
 		return fmt.Errorf("unknown station %s", stationID)
 	}
 	prev, err := s.Store.LatestRatioObservations(ctx, stationID)
@@ -105,16 +203,8 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 			_ = s.Notifier.Send(ctx, ev)
 		}
 	}
-
-	// Real-cost probe (if enabled for this station).
-	if s.Prober != nil {
-		for _, x := range s.Stations {
-			if x.ID != stationID || !x.Probe.Enabled {
-				continue
-			}
-			s.runStationProbe(ctx, x, obs)
-			break
-		}
+	if s.Prober != nil && found && stn.Probe.Enabled {
+		s.runStationProbe(ctx, stn, obs)
 	}
 	return nil
 }
@@ -126,7 +216,7 @@ func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs 
 		return
 	}
 	if pres.Error == "deduped" {
-		return // within the dedupe window — not a real probe
+		return
 	}
 	if err := s.Store.InsertProbeResult(ctx, pres); err != nil {
 		s.logger().Error("probe store", "station", st.ID, "err", err)
@@ -141,30 +231,36 @@ func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs 
 	}
 }
 
-// Run polls each enabled station on its interval and runs a daily retention
-// job until ctx is cancelled.
+// Run polls each enabled station and runs a daily retention job until ctx cancelled.
 func (s *Scheduler) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-	for _, st := range s.Stations {
+	s.mu.Lock()
+	s.runCtx = ctx
+	for _, st := range s.stationList {
 		if !st.Enabled {
 			continue
 		}
-		wg.Add(1)
-		go func(st domain.Station) {
-			defer wg.Done()
-			interval := time.Duration(st.PollInterval)
-			if interval < 2*time.Minute {
-				interval = 2 * time.Minute // respect station-side caches
-			}
-			s.pollLoop(ctx, st, interval)
-		}(st)
+		s.startStationLocked(ctx, st)
 	}
+	s.mu.Unlock()
+	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		s.retentionLoop(ctx)
 	}()
+	<-ctx.Done()
 	wg.Wait()
+	s.logger().Info("scheduler stopped")
+}
+
+func (s *Scheduler) startStationLocked(parent context.Context, st domain.Station) {
+	ctx, cancel := context.WithCancel(parent)
+	s.cancels[st.ID] = cancel
+	interval := time.Duration(st.PollInterval)
+	if interval < 2*time.Minute {
+		interval = 2 * time.Minute
+	}
+	go s.pollLoop(ctx, st, interval)
 }
 
 func (s *Scheduler) pollLoop(ctx context.Context, st domain.Station, interval time.Duration) {

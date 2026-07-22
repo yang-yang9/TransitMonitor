@@ -7,19 +7,13 @@
 //	transitmonitor -config config.yaml         # serve dashboard + poll loop until Ctrl-C
 //	transitmonitor -version
 //
-// Env overrides (win over flags/config):
-//
-//	TRANSMONITOR_CONFIG            config file path
-//	TRANSMONITOR_DB_PATH           sqlite db path
-//	TRANSMONITOR_DASHBOARD_ADDR    listen address
-//	TRANSMONITOR_DASHBOARD_TOKEN   bearer token for non-localhost dashboard access
-//	TRANSMONITOR_ENCRYPTION_KEY    passphrase for at-rest credential encryption
-//	TRANSMONITOR_LOG_LEVEL         debug | info | warn | error (default info)
+// Stations come from YAML (authoritative, in-memory) + DB-persisted web-added
+// stations (when TRANSMONITOR_ENCRYPTION_KEY is set). The web UI can add/remove
+// stations at runtime via /stations.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -33,6 +27,7 @@ import (
 	"transitmonitor/internal/alert"
 	"transitmonitor/internal/config"
 	"transitmonitor/internal/dashboard"
+	"transitmonitor/internal/domain"
 	"transitmonitor/internal/e2e"
 	"transitmonitor/internal/probe"
 	"transitmonitor/internal/scheduler"
@@ -77,7 +72,6 @@ func main() {
 	if err != nil {
 		fatal(logger, "load config: %v", err)
 	}
-	// Apply env overrides.
 	if v := os.Getenv("TRANSMONITOR_DB_PATH"); v != "" {
 		cfg.DB.Path = v
 	}
@@ -91,35 +85,41 @@ func main() {
 	}
 	defer st.Close()
 
-	adapters := make(map[string]adapter.Adapter, len(cfg.Stations))
-	for _, s := range cfg.Stations {
-		a, err := adapter.NewAdapter(s, http.DefaultClient)
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	encKey := deriveKeyFromEnv()
+
+	// Stations = YAML (authoritative, creds in-memory) + DB-persisted (web-added).
+	stations := cfg.Stations
+	if encKey != nil {
+		if dbSt, err := st.ListStationsDB(context.Background(), encKey); err == nil {
+			for _, dbs := range dbSt {
+				if !containsID(stations, dbs.ID) {
+					stations = append(stations, dbs)
+				}
+			}
+		}
+	}
+
+	adapters := make(map[string]adapter.Adapter, len(stations))
+	for _, s := range stations {
+		a, err := adapter.NewAdapter(s, httpClient)
 		if err != nil {
 			fatal(logger, "adapter for station %s: %v", s.ID, err)
 		}
 		adapters[s.ID] = a
 	}
 	notifier := buildNotifier(cfg)
-	sched := scheduler.New(cfg.Stations, adapters, st, cfg.Alerts.Rules, notifier)
+	sched := scheduler.New(stations, adapters, st, cfg.Alerts.Rules, notifier)
 	sched.SetLogger(logger)
-	sched.Prober = probe.NewProber(http.DefaultClient)
+	sched.SetEncKey(encKey)
+	sched.SetClient(httpClient)
+	sched.Prober = probe.NewProber(httpClient)
 
-	// Persist credentials at-rest (encrypted) when a passphrase is configured.
-	if key := os.Getenv("TRANSMONITOR_ENCRYPTION_KEY"); key != "" {
-		encKey := secrets.DeriveKey(key)
-		for _, s := range cfg.Stations {
-			b, _ := json.Marshal(s.Auth)
-			if err := st.SetCredentials(context.Background(), s.ID, encKey, string(b)); err != nil {
-				logger.Error("persist credentials", "station", s.ID, "err", err)
-			}
-		}
-		_ = st.InsertAuditLog(context.Background(), "main", "credentials.persisted", "", fmt.Sprintf("stations=%d", len(cfg.Stations)))
-		logger.Info("persisted encrypted credentials", "count", len(cfg.Stations))
-	}
-	_ = st.InsertAuditLog(context.Background(), "main", "startup", "", fmt.Sprintf("version=%s stations=%d", version, len(cfg.Stations)))
+	_ = st.InsertAuditLog(context.Background(), "main", "startup", "",
+		fmt.Sprintf("version=%s stations=%d enc=%v", version, len(stations), encKey != nil))
 
 	if once {
-		for _, s := range cfg.Stations {
+		for _, s := range stations {
 			if err := sched.PollOnce(context.Background(), s.ID); err != nil {
 				logger.Error("once", "station", s.ID, "err", err)
 				continue
@@ -137,7 +137,8 @@ func main() {
 	if addr != "" {
 		dashAddr = addr
 	}
-	dash := dashboard.New(cfg.Stations, st, cfg.Dashboard.Token)
+	dash := dashboard.New(stations, st, cfg.Dashboard.Token)
+	dash.SetManager(sched) // enables web CRUD (add/remove stations at runtime)
 	go func() {
 		logger.Info("dashboard", "addr", dashAddr)
 		if err := dash.ListenAndServe(dashAddr); err != nil && err != http.ErrServerClosed {
@@ -147,9 +148,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	logger.Info("TransitMonitor running", "stations", len(cfg.Stations), "version", version)
-	sched.Run(ctx) // blocks until signal
-
+	logger.Info("TransitMonitor running", "stations", len(stations), "version", version)
+	sched.Run(ctx)
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = dash.Shutdown(shutCtx)
@@ -188,6 +188,22 @@ func envOr(key, dflt string) string {
 		return v
 	}
 	return dflt
+}
+
+func deriveKeyFromEnv() []byte {
+	if key := os.Getenv("TRANSMONITOR_ENCRYPTION_KEY"); key != "" {
+		return secrets.DeriveKey(key)
+	}
+	return nil
+}
+
+func containsID(sts []domain.Station, id string) bool {
+	for _, s := range sts {
+		if s.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func fatal(logger *slog.Logger, format string, args ...any) {

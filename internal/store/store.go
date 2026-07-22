@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -18,6 +19,8 @@ import (
 	"transitmonitor/internal/secrets"
 
 	_ "modernc.org/sqlite"
+
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed migrations/*.sql
@@ -283,6 +286,80 @@ func (s *Store) ListAuditLogs(ctx context.Context, limit int) ([]domain.AuditEnt
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// UpsertStation persists a station (config blob + encrypted creds). encKey may be nil
+// (then creds are not stored). Used to seed YAML stations + web-added stations.
+func (s *Store) UpsertStation(ctx context.Context, st domain.Station, encKey []byte) error {
+	blob, err := json.Marshal(st) // AuthConfig fields are json:"-" → creds omitted from blob
+	if err != nil {
+		return err
+	}
+	tags := strings.Join(st.Tags, ",")
+	enabled := 0
+	if st.Enabled {
+		enabled = 1
+	}
+	pollSec := int64(time.Duration(st.PollInterval) / time.Second)
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO stations (id,name,kind,base_url,config_yaml,poll_interval_seconds,tags,enabled)
+		VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind,
+		base_url=excluded.base_url, config_yaml=excluded.config_yaml, poll_interval_seconds=excluded.poll_interval_seconds,
+		tags=excluded.tags, enabled=excluded.enabled, updated_at=CURRENT_TIMESTAMP`,
+		st.ID, st.Name, string(st.Kind), st.BaseURL, string(blob), pollSec, tags, enabled); err != nil {
+		return err
+	}
+	if encKey == nil {
+		return nil
+	}
+	credsBlob, err := yaml.Marshal(st.Auth)
+	if err != nil {
+		return err
+	}
+	ct, nonce, err := secrets.Encrypt(encKey, credsBlob)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO credentials (station_id, ciphertext, nonce) VALUES (?,?,?)
+		ON CONFLICT(station_id) DO UPDATE SET ciphertext=excluded.ciphertext, nonce=excluded.nonce, updated_at=CURRENT_TIMESTAMP`,
+		st.ID, ct, nonce)
+	return err
+}
+
+// ListStationsDB loads all persisted stations (config blob + decrypted creds).
+func (s *Store) ListStationsDB(ctx context.Context, encKey []byte) ([]domain.Station, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, config_yaml FROM stations`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Station
+	for rows.Next() {
+		var st domain.Station
+		var id, blob string
+		if err := rows.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(blob), &st); err != nil {
+			continue
+		}
+		st.ID = id
+		if encKey != nil {
+			var ct, nonce []byte
+			if e := s.db.QueryRowContext(ctx, "SELECT ciphertext, nonce FROM credentials WHERE station_id=?", id).Scan(&ct, &nonce); e == nil {
+				if pt, e := secrets.Decrypt(encKey, ct, nonce); e == nil {
+					_ = yaml.Unmarshal(pt, &st.Auth)
+				}
+			}
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
+// DeleteStation removes a station and its (cascade) credentials.
+func (s *Store) DeleteStation(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM stations WHERE id=?", id)
+	return err
 }
 
 // InsertSnapshot stores a raw snapshot payload.
