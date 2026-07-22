@@ -120,7 +120,13 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			statusBadge(lang, p.Error),
 		})
 	}
+	pollErrs, _ := s.store.CountPollErrors(ctx, id)
+	uptime := "100%"
+	if pollErrs > 0 {
+		uptime = fmt.Sprintf("%d errors", pollErrs)
+	}
 	info := `<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span> ` + esc(st.BaseURL) +
+		` <span class="badge b-warn">⚠ ` + uptime + `</span>` +
 		` <a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
 	body := `<div class="page-hdr"><h1>` + esc(st.Name) + `</h1><p class="sub">` + info + `</p></div>` +
 		`<h2>` + t(lang, "section.ratios") + `</h2>` + renderTable(lang, []string{t(lang, "col.group"), t(lang, "col.model"), "input $/M", "output $/M", "trend", t(lang, "col.status")}, ratioRows) +
