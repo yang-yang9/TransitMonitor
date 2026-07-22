@@ -114,8 +114,11 @@ type CapabilityReport struct {
 	HasAdminGroups   bool
 	HasAdminChannels bool
 	HasUserChannels  bool
-	SimpleMode       bool // sub2api RunMode=simple
-	SelfUseMode      bool // new-api self_use_mode_enabled
+	SimpleMode       bool
+	HasQuota         bool
+	QuotaRemaining   float64
+	QuotaUsed        float64 // sub2api RunMode=simple
+	SelfUseMode      bool    // new-api self_use_mode_enabled
 	QuotaPerUnit     float64
 	USDExchangeRate  float64
 }

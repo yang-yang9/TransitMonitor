@@ -506,3 +506,10 @@ func (s *Store) ObservationHistory(ctx context.Context, stationID, modelName str
 	}
 	return out, rows.Err()
 }
+
+// CountPollErrors counts audit_log entries with action="poll.error" for a station.
+func (s *Store) CountPollErrors(ctx context.Context, stationID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM audit_log WHERE action=? AND target=?", "poll.error", stationID).Scan(&count)
+	return count, err
+}

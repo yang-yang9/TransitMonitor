@@ -232,6 +232,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 			_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
 		}
 	}
+	if caps.HasQuota {
+		_ = s.Store.InsertAuditLog(ctx, "adapter", "quota", stationID, fmt.Sprintf("remaining=%v used=%v", caps.QuotaRemaining, caps.QuotaUsed))
+	}
 	if s.Prober != nil && found && stn.Probe.Enabled {
 		s.runStationProbe(ctx, stn, obs)
 	}

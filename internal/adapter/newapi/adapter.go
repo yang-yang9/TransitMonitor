@@ -101,6 +101,24 @@ type ratioConfigResp struct {
 	Data    ratioConfigData `json:"data"`
 }
 
+type optionEntry struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type userSelfResp struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Quota     float64 `json:"quota"`
+		UsedQuota float64 `json:"used_quota"`
+	} `json:"data"`
+}
+
+type optionResp struct {
+	Success bool          `json:"success"`
+	Data    []optionEntry `json:"data"`
+}
+
 type userGroupsResp struct {
 	Success bool `json:"success"`
 	Data    map[string]struct {
@@ -171,6 +189,24 @@ func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityRepor
 		caps.Endpoints = append(caps.Endpoints, endpoint("/api/pricing", status, nil, now))
 	}
 
+	// /api/user/self (PAT) — quota/balance.
+	if a.PAT != "" {
+		if status, body, err := a.doGet(ctx, "/api/user/self", a.PAT); err == nil && status == 200 {
+			var us userSelfResp
+			if json.Unmarshal(body, &us) == nil {
+				caps.HasQuota = true
+				caps.QuotaRemaining = us.Data.Quota - us.Data.UsedQuota
+				caps.QuotaUsed = us.Data.UsedQuota
+			}
+		}
+	}
+	// /api/option/ (root PAT — richest source, returns all ratio maps as JSON strings).
+	if a.PAT != "" {
+		if status, _, err := a.doGet(ctx, "/api/option/", a.PAT); err == nil {
+			caps.HasOption = status == 200
+			caps.Endpoints = append(caps.Endpoints, endpoint("/api/option/", status, nil, now))
+		}
+	}
 	// /api/user/self/groups (PAT).
 	if a.PAT != "" {
 		if status, _, err := a.doGet(ctx, "/api/user/self/groups", a.PAT); err == nil {
@@ -208,6 +244,40 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 		}
 		data.TopGroupRatio = rc.Data.GroupRatio
 		data.Models = a.modelsFromMaps(rc.Data)
+	case caps.HasOption:
+		src = "/api/option/"
+		status, body, err := a.doGet(ctx, src, a.PAT)
+		if err != nil {
+			return snap, nil, err
+		}
+		if status != 200 {
+			return snap, nil, fmt.Errorf("option: status %d", status)
+		}
+		snap.RawPayloads[src] = body
+		var or optionResp
+		if err := json.Unmarshal(body, &or); err != nil {
+			return snap, nil, err
+		}
+		// Parse the JSON-string values into ratio maps (same structure as ratio_config)
+		var rc ratioConfigData
+		for _, kv := range or.Data {
+			switch kv.Key {
+			case "ModelRatio":
+				_ = json.Unmarshal([]byte(kv.Value), &rc.ModelRatio)
+			case "CompletionRatio":
+				_ = json.Unmarshal([]byte(kv.Value), &rc.CompletionRatio)
+			case "CacheRatio":
+				_ = json.Unmarshal([]byte(kv.Value), &rc.CacheRatio)
+			case "CreateCacheRatio":
+				_ = json.Unmarshal([]byte(kv.Value), &rc.CreateCacheRatio)
+			case "ModelPrice":
+				_ = json.Unmarshal([]byte(kv.Value), &rc.ModelPrice)
+			case "GroupRatio":
+				_ = json.Unmarshal([]byte(kv.Value), &rc.GroupRatio)
+			}
+		}
+		data.TopGroupRatio = rc.GroupRatio
+		data.Models = a.modelsFromMaps(rc)
 	case caps.HasPricing:
 		src = "/api/pricing"
 		status, body, err := a.doGet(ctx, src, "")

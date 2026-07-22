@@ -140,6 +140,12 @@ func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityRepor
 			caps.Endpoints = append(caps.Endpoints, endpoint("/v1/sub2api/billing", status, nil, now))
 		}
 	}
+	if a.AdminAPIKey != "" {
+		if status, _, err := a.doGet(ctx, "/api/v1/admin/groups", a.AdminAPIKey); err == nil {
+			caps.HasAdminGroups = status == 200
+			caps.Endpoints = append(caps.Endpoints, endpoint("/api/v1/admin/groups", status, nil, now))
+		}
+	}
 	if a.JWT != "" {
 		if status, _, err := a.doGet(ctx, "/api/v1/channels/available", a.JWT); err == nil {
 			caps.HasUserChannels = status == 200
