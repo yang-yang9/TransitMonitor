@@ -248,3 +248,76 @@ func (d *DingTalkNotifier) Send(ctx context.Context, ev AlertEvent) error {
 	}
 	return nil
 }
+
+// SignLark computes the Lark/飞书 webhook signature.
+// Lark signing: hmac_sha256(key=timestamp+"\n"+secret, msg="") → base64.
+func SignLark(secret string, timestamp int64) string {
+	mac := hmac.New(sha256.New, []byte(fmt.Sprintf("%d\n%s", timestamp, secret)))
+	mac.Write([]byte{})
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// LarkNotifier sends a text message to a Lark/飞书 custom bot webhook (signed).
+type LarkNotifier struct {
+	WebhookURL string
+	Secret     string
+	Client     *http.Client
+	now        func() time.Time
+}
+
+func NewLark(webhookURL, secret string, client *http.Client) *LarkNotifier {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return &LarkNotifier{WebhookURL: webhookURL, Secret: secret, Client: client, now: time.Now}
+}
+
+func (l *LarkNotifier) SetClock(f func() time.Time) { l.now = f }
+
+func (l *LarkNotifier) Send(ctx context.Context, ev AlertEvent) error {
+	ts := l.now().Unix()
+	text := fmt.Sprintf("[%s] %s\nstation: %s\nmodel: %s\npayload: %v", ev.Severity, ev.Rule, ev.StationID, ev.Model, ev.Payload)
+	body := map[string]any{"msg_type": "text", "content": map[string]string{"text": text}}
+	if l.Secret != "" {
+		body["timestamp"] = strconv.FormatInt(ts, 10)
+		body["sign"] = SignLark(l.Secret, ts)
+	}
+	b, _ := json.Marshal(body)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, l.WebhookURL, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := l.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("lark: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// SlackNotifier sends a message to a Slack incoming webhook.
+type SlackNotifier struct {
+	WebhookURL string
+	Client     *http.Client
+}
+
+func (s *SlackNotifier) Send(ctx context.Context, ev AlertEvent) error {
+	c := s.Client
+	if c == nil {
+		c = http.DefaultClient
+	}
+	text := fmt.Sprintf("[%s] %s — station: %s, model: %s", ev.Severity, ev.Rule, ev.StationID, ev.Model)
+	b, _ := json.Marshal(map[string]string{"text": text})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.WebhookURL, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("slack: status %d", resp.StatusCode)
+	}
+	return nil
+}

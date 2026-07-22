@@ -35,6 +35,13 @@ type AlertsConfig struct {
 	Webhook struct {
 		URL string `yaml:"url"`
 	} `yaml:"webhook"`
+	Lark struct {
+		Webhook string `yaml:"webhook"`
+		Secret  string `yaml:"secret"`
+	} `yaml:"lark"`
+	Slack struct {
+		Webhook string `yaml:"webhook"`
+	} `yaml:"slack"`
 }
 
 type DashboardConfig struct {

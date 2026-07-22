@@ -164,6 +164,12 @@ func buildNotifier(cfg *config.File) alert.Notifier {
 	if cfg.Alerts.Webhook.URL != "" {
 		ns = append(ns, &alert.WebhookNotifier{URL: cfg.Alerts.Webhook.URL})
 	}
+	if cfg.Alerts.Lark.Webhook != "" {
+		ns = append(ns, alert.NewLark(cfg.Alerts.Lark.Webhook, cfg.Alerts.Lark.Secret, http.DefaultClient))
+	}
+	if cfg.Alerts.Slack.Webhook != "" {
+		ns = append(ns, &alert.SlackNotifier{WebhookURL: cfg.Alerts.Slack.Webhook})
+	}
 	if len(ns) == 0 {
 		return nil
 	}

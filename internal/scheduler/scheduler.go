@@ -6,6 +6,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -200,7 +201,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 	}
 	if s.Notifier != nil {
 		for _, ev := range alert.Evaluate(s.Rules, events, nil) {
-			_ = s.Notifier.Send(ctx, ev)
+			sendErr := s.Notifier.Send(ctx, ev)
+			payload, _ := json.Marshal(ev.Payload)
+			_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
 		}
 	}
 	if s.Prober != nil && found && stn.Probe.Enabled {
@@ -226,7 +229,9 @@ func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs 
 			pres.Model, pres.TokensIn, pres.TokensOut, pres.MarkupPct, pres.CostUSD, pres.DeclaredUnavailable, pres.Error))
 	if s.Notifier != nil {
 		for _, ev := range alert.Evaluate(s.Rules, nil, []domain.ProbeResult{pres}) {
-			_ = s.Notifier.Send(ctx, ev)
+			sendErr := s.Notifier.Send(ctx, ev)
+			payload, _ := json.Marshal(ev.Payload)
+			_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
 		}
 	}
 }
@@ -302,4 +307,11 @@ func (s *Scheduler) runRetention(ctx context.Context) {
 		return
 	}
 	s.logger().Info("retention done", "snap_days", s.snapshotRetentionDays, "obs_days", s.obsRetentionDays)
+}
+
+func errStr(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return ""
 }

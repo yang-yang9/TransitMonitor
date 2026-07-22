@@ -438,3 +438,43 @@ func (s *Store) GetCredentials(ctx context.Context, stationID string, key []byte
 	}
 	return string(pt), nil
 }
+
+// AlertEventRow is a persisted alert event (for the /alerts page).
+type AlertEventRow struct {
+	ID        int64
+	Ts        time.Time
+	Rule      string
+	StationID string
+	Model     string
+	Payload   string
+	Sent      bool
+	Error     string
+}
+
+func (s *Store) InsertAlertEvent(ctx context.Context, rule, stationID, model, payload string, sent bool, errMsg string) error {
+	sentInt := 0
+	if sent {
+		sentInt = 1
+	}
+	_, err := s.db.ExecContext(ctx, "INSERT INTO alert_events (rule_id, station_id, model_name, payload, sent, error) VALUES (?,?,?,?,?,?)", rule, stationID, model, payload, sentInt, errMsg)
+	return err
+}
+
+func (s *Store) ListAlertEvents(ctx context.Context, limit int) ([]AlertEventRow, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, created_at, rule_id, station_id, model_name, payload, sent, error FROM alert_events ORDER BY created_at DESC LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AlertEventRow
+	for rows.Next() {
+		var r AlertEventRow
+		var sent int
+		if err := rows.Scan(&r.ID, &r.Ts, &r.Rule, &r.StationID, &r.Model, &r.Payload, &sent, &r.Error); err != nil {
+			return nil, err
+		}
+		r.Sent = sent == 1
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

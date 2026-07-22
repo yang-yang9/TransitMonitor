@@ -246,3 +246,33 @@ func fieldVal(field string, o domain.RatioObservation) float64 {
 		return o.InputUSDPer1M
 	}
 }
+
+func (s *Server) alertsHTML(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
+	rows_data, _ := s.store.ListAlertEvents(r.Context(), 100)
+	rows := make([][]string, 0, len(rows_data))
+	for _, a := range rows_data {
+		sentBadge := `<span class="badge b-ok">✓</span>`
+		if !a.Sent {
+			sentBadge = `<span class="badge b-crit">✗</span>`
+		}
+		rows = append(rows, []string{
+			`<span class="mono">` + fmtTime(a.Ts) + `</span>`,
+			`<span class="tag">` + esc(a.Rule) + `</span>`,
+			`<span class="mono">` + esc(a.StationID) + `</span>`,
+			`<span class="mono">` + esc(a.Model) + `</span>`,
+			`<span style="font-size:.8rem;color:var(--muted)">` + esc(truncate(a.Payload, 80)) + `</span>`,
+			sentBadge,
+			esc(a.Error),
+		})
+	}
+	body := `<h1>` + t(lang, "title.alerts") + `</h1><p class="sub">` + t(lang, "sub.alerts") + `</p>` +
+		renderTable(lang, []string{t(lang, "col.time"), "rule", "station", "model", "payload", "sent", "error"}, rows)
+	writeHTMLShell(w, lang, t(lang, "title.alerts"), "alerts", body)
+}
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "..."
+	}
+	return s
+}
