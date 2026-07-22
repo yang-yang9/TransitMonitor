@@ -50,8 +50,8 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 		if !st.Enabled {
 			enabled = "—"
 		}
-		edit := `<a class="btn" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
-		del := `<button class="btn" onclick="tmDel('` + esc(st.ID) + `')">` + t(lang, "form.delete") + `</button>`
+		edit := `<a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
+		del := `<button class="btn btn-danger btn-sm" onclick="tmDel('` + esc(st.ID) + `')">` + t(lang, "form.delete") + `</button>`
 		rows = append(rows, []string{
 			esc(st.ID), esc(st.Name),
 			`<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span>`,
@@ -87,13 +87,14 @@ func (s *Server) stationEditHTML(w http.ResponseWriter, r *http.Request) {
 // PUT handler keeps the existing secret for any blank field.
 func stationForm(lang string, edit *domain.Station) string {
 	method, action, idVal, idRO, title, submit := "POST", "/api/stations", "", "", t(lang, "title.newstation"), t(lang, "form.add")
-	idRequired, idPH := "", t(lang, "form.id.auto")
-	nameVal, baseVal, groupVal, pollVal, apiVal, patVal, jwtVal, checked := "", "", "default", "3m", "", "", "", "checked"
+	idPH := t(lang, "form.id.auto")
+	nameVal, baseVal, groupVal, pollVal := "", "", "default", "3m"
 	kindNew, kindSub := "selected", ""
 	apiPH, patPH, jwtPH := "sk-...", "new-api PAT", "sub2api user JWT"
+	checkedAttr := "checked"
 	if edit != nil {
 		method, action, idVal, idRO, title, submit = "PUT", "/api/stations/"+edit.ID, edit.ID, "readonly", t(lang, "title.editstation"), t(lang, "form.save")
-		idRequired, idPH = "required", ""
+		idPH = ""
 		nameVal, baseVal, pollVal = edit.Name, edit.BaseURL, time.Duration(edit.PollInterval).String()
 		groupVal = edit.Auth.Group
 		if groupVal == "" {
@@ -105,29 +106,30 @@ func stationForm(lang string, edit *domain.Station) string {
 		} else {
 			kindNew = "selected"
 		}
-		checked = ""
+		checkedAttr = ""
 		if edit.Enabled {
-			checked = "checked"
+			checkedAttr = "checked"
 		}
 		apiPH, patPH, jwtPH = t(lang, "form.keepblank"), t(lang, "form.keepblank"), t(lang, "form.keepblank")
 	}
-	return `<h1>` + title + `</h1>
+	return `<div class="form-wrap"><h1>` + title + `</h1><p class="sub">` + t(lang, "form.id.auto") + `</p>
 <div class="card">
 <form id="stform" onsubmit="return tmSubmit('` + method + `','` + action + `')">
-  <div class="grid">
-    <label>` + t(lang, "form.id") + `<input name="id" ` + idRequired + ` value="` + esc(idVal) + `" placeholder="` + esc(idPH) + `" ` + idRO + `></label>
-    <label>` + t(lang, "form.name") + `<input name="name" required value="` + esc(nameVal) + `"></label>
-    <label>` + t(lang, "form.baseurl") + `<input name="base_url" required value="` + esc(baseVal) + `" placeholder="https://relay.example.com"></label>
-    <label>` + t(lang, "form.kind") + `<select name="kind"><option value="newapi" ` + kindNew + `>newapi</option><option value="sub2api" ` + kindSub + `>sub2api</option></select></label>
-    <label>` + t(lang, "form.group") + `<input name="group" value="` + esc(groupVal) + `"></label>
-    <label>` + t(lang, "form.pollinterval") + `<input name="poll_interval" value="` + esc(pollVal) + `"></label>
-    <label>` + t(lang, "form.apikey") + `<input name="api_key" value="` + esc(apiVal) + `" placeholder="` + apiPH + `"></label>
-    <label>` + t(lang, "form.pat") + `<input name="pat" value="` + esc(patVal) + `" placeholder="` + patPH + `"></label>
-    <label>` + t(lang, "form.jwt") + `<input name="jwt" value="` + esc(jwtVal) + `" placeholder="` + jwtPH + `"></label>
-    <label>` + t(lang, "form.enabled") + `<input type="checkbox" name="enabled" ` + checked + `></label>
+  <div class="form-grid">
+    <div class="field"><span class="field-label">` + t(lang, "form.id") + `</span><input name="id" value="` + esc(idVal) + `" placeholder="` + esc(idPH) + `" ` + idRO + `></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.name") + `</span><input name="name" required value="` + esc(nameVal) + `"></div>
+    <div class="field full"><span class="field-label">` + t(lang, "form.baseurl") + `</span><input name="base_url" required value="` + esc(baseVal) + `" placeholder="https://relay.example.com"></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.kind") + `</span><select name="kind"><option value="newapi" ` + kindNew + `>newapi</option><option value="sub2api" ` + kindSub + `>sub2api</option></select></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.group") + `</span><input name="group" value="` + esc(groupVal) + `"></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.pollinterval") + `</span><input name="poll_interval" value="` + esc(pollVal) + `"></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.apikey") + `</span><input name="api_key" placeholder="` + apiPH + `"></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.pat") + `</span><input name="pat" placeholder="` + patPH + `"></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.jwt") + `</span><input name="jwt" placeholder="` + jwtPH + `"></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.enabled") + `</span><label class="toggle"><input type="checkbox" name="enabled" ` + checkedAttr + `><span class="slider"></span>` + t(lang, "form.enabled") + `</label></div>
   </div>
-  <p><button class="btn" type="submit">` + submit + `</button> <a class="btn" href="/stations">←</a></p>
+  <div class="btn-group" style="margin-top:1.2rem"><button class="btn" type="submit">` + submit + `</button><a class="btn btn-outline" href="/stations">←</a></div>
 </form>
+</div>
 <script>
 function tmSubmit(m,u){
   var f=document.getElementById('stform'), v=function(n){var el=f[n]; if(!el) return ''; if(el.type=='checkbox') return el.checked; return el.value;};
