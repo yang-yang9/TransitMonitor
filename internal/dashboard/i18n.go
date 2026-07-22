@@ -32,6 +32,7 @@ var trans = map[string]map[string]string{
 		"form.apikey": "API Key (sk-)", "form.pat": "PAT（可选）", "form.jwt": "JWT（可选，sub2api）", "form.group": "分组",
 		"form.pollinterval": "轮询间隔", "form.enabled": "启用", "form.add": "添加", "form.delete": "删除",
 		"form.confirm": "确认删除该站点？", "form.empty": "（暂无站点，点「添加站点」新增）",
+		"title.editstation": "编辑站点", "form.edit": "编辑", "form.save": "保存", "form.keepblank": "留空保持不变",
 	},
 	"en": {
 		"nav.overview": "Overview", "nav.matrix": "Matrix", "nav.changes": "Changes",
@@ -59,6 +60,7 @@ var trans = map[string]map[string]string{
 		"form.apikey": "API Key (sk-)", "form.pat": "PAT (optional)", "form.jwt": "JWT (optional, sub2api)", "form.group": "Group",
 		"form.pollinterval": "Poll interval", "form.enabled": "Enabled", "form.add": "Add", "form.delete": "Delete",
 		"form.confirm": "Delete this station?", "form.empty": "(no stations yet — click Add station)",
+		"title.editstation": "Edit station", "form.edit": "Edit", "form.save": "Save", "form.keepblank": "leave blank to keep",
 	},
 }
 

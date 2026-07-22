@@ -29,7 +29,16 @@ func (s *Server) stationsList() []domain.Station {
 	return s.stations
 }
 
-// GET /stations — management page: list + add link + delete buttons.
+func (s *Server) findStation(id string) (domain.Station, bool) {
+	for _, st := range s.stationsList() {
+		if st.ID == id {
+			return st, true
+		}
+	}
+	return domain.Station{}, false
+}
+
+// GET /stations — management page: list + add link + edit/delete buttons.
 func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
 	sts := s.stationsList()
@@ -39,11 +48,12 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 		if !st.Enabled {
 			enabled = "—"
 		}
+		edit := `<a class="btn" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
 		del := `<button class="btn" onclick="tmDel('` + esc(st.ID) + `')">` + t(lang, "form.delete") + `</button>`
 		rows = append(rows, []string{
 			esc(st.ID), esc(st.Name),
 			`<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span>`,
-			esc(st.BaseURL), enabled, del,
+			esc(st.BaseURL), enabled, edit + " " + del,
 		})
 	}
 	body := `<h1>` + t(lang, "title.stations") + `</h1>` +
@@ -53,37 +63,72 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 	writeHTMLShell(w, lang, t(lang, "title.stations"), "stations", body)
 }
 
-// GET /stations/new — add-station form (posts JSON to /api/stations).
+// GET /stations/new — add-station form.
 func (s *Server) stationFormHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
-	body := `<h1>` + t(lang, "title.newstation") + `</h1>` + stationForm(lang)
-	writeHTMLShell(w, lang, t(lang, "title.newstation"), "stations", body)
+	writeHTMLShell(w, lang, t(lang, "title.newstation"), "stations", stationForm(lang, nil))
 }
 
-func stationForm(lang string) string {
-	return `
+// GET /stations/{id}/edit — edit-station form (pre-fills non-secret fields; secrets blank = keep).
+func (s *Server) stationEditHTML(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
+	st, ok := s.findStation(chi.URLParam(r, "id"))
+	if !ok {
+		http.Error(w, "station not found", http.StatusNotFound)
+		return
+	}
+	writeHTMLShell(w, lang, t(lang, "title.editstation"), "stations", stationForm(lang, &st))
+}
+
+// stationForm renders the add (edit==nil) or edit form. Secret fields are never
+// pre-filled; in edit mode they're blank with a "keep blank" placeholder, and the
+// PUT handler keeps the existing secret for any blank field.
+func stationForm(lang string, edit *domain.Station) string {
+	method, action, idVal, idRO, title, submit := "POST", "/api/stations", "", "", t(lang, "title.newstation"), t(lang, "form.add")
+	nameVal, baseVal, groupVal, pollVal, apiVal, patVal, jwtVal, checked := "", "", "default", "3m", "", "", "", "checked"
+	kindNew, kindSub := "selected", ""
+	apiPH, patPH, jwtPH := "sk-...", "new-api PAT", "sub2api user JWT"
+	if edit != nil {
+		method, action, idVal, idRO, title, submit = "PUT", "/api/stations/"+edit.ID, edit.ID, "readonly", t(lang, "title.editstation"), t(lang, "form.save")
+		nameVal, baseVal, pollVal = edit.Name, edit.BaseURL, time.Duration(edit.PollInterval).String()
+		groupVal = edit.Auth.Group
+		if groupVal == "" {
+			groupVal = "default"
+		}
+		kindNew, kindSub = "", ""
+		if edit.Kind == domain.KindSub2API {
+			kindSub = "selected"
+		} else {
+			kindNew = "selected"
+		}
+		checked = ""
+		if edit.Enabled {
+			checked = "checked"
+		}
+		apiPH, patPH, jwtPH = t(lang, "form.keepblank"), t(lang, "form.keepblank"), t(lang, "form.keepblank")
+	}
+	return `<h1>` + title + `</h1>
 <div class="card">
-<form id="stform" onsubmit="return tmSubmit(event)">
+<form id="stform" onsubmit="return tmSubmit('` + method + `','` + action + `')">
   <div class="grid">
-    <label>` + t(lang, "form.id") + `<input name="id" required></label>
-    <label>` + t(lang, "form.name") + `<input name="name" required></label>
-    <label>` + t(lang, "form.baseurl") + `<input name="base_url" required placeholder="https://relay.example.com"></label>
-    <label>` + t(lang, "form.kind") + `<select name="kind"><option value="newapi">newapi</option><option value="sub2api">sub2api</option></select></label>
-    <label>` + t(lang, "form.group") + `<input name="group" value="default"></label>
-    <label>` + t(lang, "form.pollinterval") + `<input name="poll_interval" value="3m"></label>
-    <label>` + t(lang, "form.apikey") + `<input name="api_key" placeholder="sk-..."></label>
-    <label>` + t(lang, "form.pat") + `<input name="pat" placeholder="new-api PAT"></label>
-    <label>` + t(lang, "form.jwt") + `<input name="jwt" placeholder="sub2api user JWT"></label>
-    <label>` + t(lang, "form.enabled") + `<input type="checkbox" name="enabled" checked></label>
+    <label>` + t(lang, "form.id") + `<input name="id" required value="` + esc(idVal) + `" ` + idRO + `></label>
+    <label>` + t(lang, "form.name") + `<input name="name" required value="` + esc(nameVal) + `"></label>
+    <label>` + t(lang, "form.baseurl") + `<input name="base_url" required value="` + esc(baseVal) + `" placeholder="https://relay.example.com"></label>
+    <label>` + t(lang, "form.kind") + `<select name="kind"><option value="newapi" ` + kindNew + `>newapi</option><option value="sub2api" ` + kindSub + `>sub2api</option></select></label>
+    <label>` + t(lang, "form.group") + `<input name="group" value="` + esc(groupVal) + `"></label>
+    <label>` + t(lang, "form.pollinterval") + `<input name="poll_interval" value="` + esc(pollVal) + `"></label>
+    <label>` + t(lang, "form.apikey") + `<input name="api_key" value="` + esc(apiVal) + `" placeholder="` + apiPH + `"></label>
+    <label>` + t(lang, "form.pat") + `<input name="pat" value="` + esc(patVal) + `" placeholder="` + patPH + `"></label>
+    <label>` + t(lang, "form.jwt") + `<input name="jwt" value="` + esc(jwtVal) + `" placeholder="` + jwtPH + `"></label>
+    <label>` + t(lang, "form.enabled") + `<input type="checkbox" name="enabled" ` + checked + `></label>
   </div>
-  <p><button class="btn" type="submit">` + t(lang, "form.add") + `</button> <a class="btn" href="/stations">←</a></p>
+  <p><button class="btn" type="submit">` + submit + `</button> <a class="btn" href="/stations">←</a></p>
 </form>
 <script>
-function tmSubmit(e){
-  e.preventDefault();
-  var f=e.target, v=function(n){var el=f[n]; if(!el) return ''; if(el.type=='checkbox') return el.checked; return el.value;};
+function tmSubmit(m,u){
+  var f=document.getElementById('stform'), v=function(n){var el=f[n]; if(!el) return ''; if(el.type=='checkbox') return el.checked; return el.value;};
   var st={id:v('id'),name:v('name'),base_url:v('base_url'),kind:v('kind'),auth:{api_key:v('api_key'),pat:v('pat'),jwt:v('jwt'),group:v('group')},poll_interval:v('poll_interval'),enabled:!!v('enabled')};
-  fetch('/api/stations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(st)}).then(function(r){if(r.ok){location.href='/stations';}else{r.text().then(function(t){alert(t);});}}).catch(function(e){alert(e);});
+  fetch(u,{method:m,headers:{'Content-Type':'application/json'},body:JSON.stringify(st)}).then(function(r){if(r.ok){location.href='/stations';}else{r.text().then(function(t){alert(t);});}}).catch(function(e){alert(e);});
   return false;
 }
 </script>
@@ -117,7 +162,6 @@ func (in stationInput) toStation() (domain.Station, error) {
 
 // POST /api/stations
 func (s *Server) stationsCreate(w http.ResponseWriter, r *http.Request) {
-	lang := s.lang(w, r)
 	if s.mgr == nil {
 		http.Error(w, "station manager not configured", http.StatusServiceUnavailable)
 		return
@@ -140,11 +184,10 @@ func (s *Server) stationsCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = lang
 	writeJSON(w, 201, map[string]string{"id": st.ID, "status": "added"})
 }
 
-// PUT /api/stations/{id} — upsert (edit).
+// PUT /api/stations/{id} — upsert (edit). Blank secret fields keep the existing value.
 func (s *Server) stationsUpsert(w http.ResponseWriter, r *http.Request) {
 	if s.mgr == nil {
 		http.Error(w, "station manager not configured", http.StatusServiceUnavailable)
@@ -156,6 +199,20 @@ func (s *Server) stationsUpsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = chi.URLParam(r, "id")
+	if existing, ok := s.findStation(in.ID); ok {
+		if in.Auth.APIKey == "" {
+			in.Auth.APIKey = existing.Auth.APIKey
+		}
+		if in.Auth.PAT == "" {
+			in.Auth.PAT = existing.Auth.PAT
+		}
+		if in.Auth.JWT == "" {
+			in.Auth.JWT = existing.Auth.JWT
+		}
+		if in.Auth.Group == "" {
+			in.Auth.Group = existing.Auth.Group
+		}
+	}
 	st, err := in.toStation()
 	if err != nil {
 		http.Error(w, "poll_interval: "+err.Error(), http.StatusBadRequest)
