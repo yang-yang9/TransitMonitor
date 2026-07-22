@@ -200,9 +200,9 @@ func (s *Server) matrixJSON(w http.ResponseWriter, r *http.Request) {
 func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var b strings.Builder
-	b.WriteString(`<h1>Overview</h1><p class="sub">中转站倍率监控 · normalized effective USD/1M token · `)
+	b.WriteString(`<h1>概览</h1><p class="sub">中转站倍率监控 · 归一化有效 USD/1M token · `)
 	b.WriteString(`<a class="btn" href="/matrix">跨站对比 →</a></p>`)
-	b.WriteString(`<h2>Stations</h2><div class="grid">`)
+	b.WriteString(`<h2>站点</h2><div class="grid">`)
 	for _, st := range s.stations {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
 		n := len(obs)
@@ -223,14 +223,14 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 		b.WriteString(fmt.Sprintf(
 			`<div class="card stcard"><div class="kpi-label"><span class="dot-s %s"></span>%s</div>`+
 				`<div class="kpi">%d</div>`+
-				`<div class="meta"><span class="tag tag-pri">%s</span> %s<br>last scrape: %s · models: %d</div></div>`,
+				`<div class="meta"><span class="tag tag-pri">%s</span> %s<br>最近抓取: %s · 模型: %d</div></div>`,
 			dot, esc(st.ID), n, esc(string(st.Kind)), esc(st.BaseURL), lastStr, n))
 	}
 	b.WriteString(`</div>`)
-	b.WriteString(`<div class="card"><h2>Explore</h2><div class="kvs">`)
+	b.WriteString(`<div class="card"><h2>导航</h2><div class="kvs">`)
 	for _, it := range []navItem{
-		{"/matrix", "Cross-station matrix", ""}, {"/changes", "Changes", ""},
-		{"/probes", "Probes", ""}, {"/audit", "Audit", ""}, {"/metrics", "Metrics", ""},
+		{"/matrix", "跨站对比矩阵", ""}, {"/changes", "变更", ""},
+		{"/probes", "探测", ""}, {"/audit", "审计", ""}, {"/metrics", "指标", ""},
 	} {
 		b.WriteString(fmt.Sprintf(`<a class="btn" href="%s">%s</a>`, it.H, it.Label))
 	}

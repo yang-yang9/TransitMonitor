@@ -78,12 +78,12 @@ footer{color:var(--muted);font-size:.8rem;text-align:center;padding:1.2rem}
 type navItem struct{ H, Label, Key string }
 
 var navItems = []navItem{
-	{"/", "Overview", "overview"},
-	{"/matrix", "Matrix", "matrix"},
-	{"/changes", "Changes", "changes"},
-	{"/probes", "Probes", "probes"},
-	{"/audit", "Audit", "audit"},
-	{"/metrics", "Metrics", "metrics"},
+	{"/", "概览", "overview"},
+	{"/matrix", "矩阵", "matrix"},
+	{"/changes", "变更", "changes"},
+	{"/probes", "探测", "probes"},
+	{"/audit", "审计", "audit"},
+	{"/metrics", "指标", "metrics"},
 }
 
 // pageShell wraps body in a full HTML doc with the shared CSS + top nav.
@@ -119,7 +119,7 @@ func renderTable(cols []string, rows [][]string) string {
 	}
 	b.WriteString("</tr></thead><tbody>")
 	if len(rows) == 0 {
-		b.WriteString(`<tr><td colspan="` + fmt.Sprint(len(cols)) + `"><div class="empty">No data</div></td></tr>`)
+		b.WriteString(`<tr><td colspan="` + fmt.Sprint(len(cols)) + `"><div class="empty">暂无数据</div></td></tr>`)
 	}
 	for _, row := range rows {
 		b.WriteString("<tr>")
@@ -136,22 +136,26 @@ func renderTable(cols []string, rows [][]string) string {
 
 func severityBadge(sev string) string {
 	cls := "b-muted"
+	cn := "提示"
 	switch strings.ToLower(sev) {
 	case "critical":
 		cls = "b-crit"
+		cn = "严重"
 	case "warning":
 		cls = "b-warn"
+		cn = "警告"
 	case "info":
 		cls = "b-muted"
+		cn = "提示"
 	}
-	return `<span class="badge ` + cls + `">` + html.EscapeString(sev) + `</span>`
+	return `<span class="badge ` + cls + `" title="` + esc(sev) + `">` + cn + `</span>`
 }
 
 func statusBadge(sentinel string) string {
 	if sentinel == "" {
-		return `<span class="badge b-ok">ok</span>`
+		return `<span class="badge b-ok" title="ok">正常</span>`
 	}
-	return `<span class="badge b-warn">` + html.EscapeString(sentinel) + `</span>`
+	return `<span class="badge b-warn">` + esc(sentinel) + `</span>`
 }
 
 func priceColorClass(v, lo, hi float64) string {

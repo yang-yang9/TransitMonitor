@@ -91,10 +91,10 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 			severityBadge(e.Severity),
 		})
 	}
-	body := `<h1>Changes</h1><p class="sub">站点 <span class="tag tag-pri">` + esc(station) +
-		`</span> 的倍率/有效价变更（critical=红, warning=黄）</p>` +
-		renderTable([]string{"time", "group", "model", "field", "old", "new", "delta%", "severity"}, rows)
-	writeHTMLShell(w, "Changes · "+station, "changes", body)
+	body := `<h1>变更</h1><p class="sub">站点 <span class="tag tag-pri">` + esc(station) +
+		`</span> 的倍率/有效价变更（严重=红, 警告=黄）</p>` +
+		renderTable([]string{"时间", "分组", "模型", "字段", "旧值", "新值", "变化%", "严重度"}, rows)
+	writeHTMLShell(w, "变更 · "+station, "changes", body)
 }
 
 func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
@@ -126,10 +126,10 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 			errCell,
 		})
 	}
-	body := `<h1>Real-cost probes</h1><p class="sub">站点 <span class="tag tag-pri">` + esc(station) +
-		`</span> · markup% = 真实(探测) vs 声明有效价（<span class="pcell p-high">红=暗中加价</span> / <span class="pcell p-cheap">绿=折扣</span>）</p>` +
-		renderTable([]string{"time", "model", "tok in/out", "declared $/M", "measured $/M", "markup%", "cost $", "status"}, rows)
-	writeHTMLShell(w, "Probes · "+station, "probes", body)
+	body := `<h1>真实成本探测</h1><p class="sub">站点 <span class="tag tag-pri">` + esc(station) +
+		`</span> · 加价% = 真实(探测) vs 声明有效价（<span class="pcell p-high">红=暗中加价</span> / <span class="pcell p-cheap">绿=折扣</span>）</p>` +
+		renderTable([]string{"时间", "模型", "token 入/出", "声明 $/M", "实测 $/M", "加价%", "成本 $", "状态"}, rows)
+	writeHTMLShell(w, "探测 · "+station, "probes", body)
 }
 
 func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +157,7 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 		stCells[i] = m
 	}
 	models := sortedModels(modelSet)
-	cols := []string{"model"}
+	cols := []string{"模型"}
 	for _, st := range s.stations {
 		cols = append(cols, esc(st.ID))
 	}
@@ -190,8 +190,8 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, row)
 	}
 	sub := `<p class="sub">有效 USD/1M token 跨站对比 · <span class="pcell p-cheap">绿=最便宜</span> · <span class="pcell p-high">红=最贵</span> · 徽章=不可派生</p>`
-	body := `<h1>Cross-station matrix</h1>` + sub + renderTable(cols, rows)
-	writeHTMLShell(w, "Matrix", "matrix", body)
+	body := `<h1>跨站对比矩阵</h1>` + sub + renderTable(cols, rows)
+	writeHTMLShell(w, "矩阵", "matrix", body)
 }
 
 func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
@@ -206,9 +206,9 @@ func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
 			esc(e.Detail),
 		})
 	}
-	body := `<h1>Audit log</h1><p class="sub">启动、探测、凭据持久化等动作记录</p>` +
-		renderTable([]string{"time", "actor", "action", "target", "detail"}, rows)
-	writeHTMLShell(w, "Audit", "audit", body)
+	body := `<h1>审计日志</h1><p class="sub">启动、探测、凭据持久化等动作记录</p>` +
+		renderTable([]string{"时间", "角色", "动作", "目标", "详情"}, rows)
+	writeHTMLShell(w, "审计", "audit", body)
 }
 
 func fmtTime(t time.Time) string {
