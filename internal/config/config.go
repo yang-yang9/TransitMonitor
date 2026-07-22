@@ -5,6 +5,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -59,7 +60,17 @@ func Load(path string) (*File, error) {
 		f.Dashboard.Addr = "127.0.0.1:7421"
 	}
 	for i := range f.Stations {
-		f.Stations[i].Enabled = true // default enabled; remove from file to disable
+		st := &f.Stations[i]
+		if st.ID == "" {
+			st.ID = "station-" + st.Name
+		}
+		if st.BaseURL == "" {
+			return nil, fmt.Errorf("station %s: base_url is required", st.ID)
+		}
+		if st.Kind != "newapi" && st.Kind != "sub2api" {
+			return nil, fmt.Errorf("station %s: kind must be newapi or sub2api (got %q)", st.ID, st.Kind)
+		}
+		st.Enabled = true // default enabled; remove from file to disable
 	}
 	return &f, nil
 }

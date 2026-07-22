@@ -154,16 +154,22 @@ func pageShell(lang, title, active, body string) string {
 	if lang == "en" {
 		other, otherLabel = "zh", "中"
 	}
-	tools := fmt.Sprintf(`<div class="tools"><button class="icon-btn" id="tm-theme" onclick="tmToggleTheme()" title="%s">🌙</button>`+
+	tools := fmt.Sprintf(`<div class="tools"><button class="icon-btn" id="tm-autorefresh" onclick="tmToggleAuto()" title="Auto-refresh">🔄</button>`+
+		`<button class="icon-btn" id="tm-theme" onclick="tmToggleTheme()" title="%s">🌙</button>`+
 		`<button class="lang-btn" onclick="tmSetLang('%s')">%s</button></div>`, t(lang, "theme"), other, otherLabel)
 	js := `<script>(function(){var d=document.documentElement,s=localStorage.getItem('tm-theme');` +
-		`if(s==='dark'||s==='light'){d.dataset.theme=s;}function sync(){var b=document.getElementById('tm-theme');if(b)b.textContent=d.dataset.theme==='dark'?'☀️':'🌙';}sync();` +
-		`window.tmToggleTheme=function(){var n=(d.dataset.theme==='dark')?'light':'dark';d.dataset.theme=n;localStorage.setItem('tm-theme',n);sync();};` +
-		`window.tmSetLang=function(l){document.cookie='tm-lang='+l+';path=/;max-age=2592000';location.reload();};})();</script>`
-	return fmt.Sprintf(`<!doctype html><html lang="%s"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s · TransitMonitor</title><style>%s</style></head>`+
+		`if(s==='dark'||s==='light'){d.dataset.theme=s;}function syncTheme(){var b=document.getElementById('tm-theme');if(b)b.textContent=d.dataset.theme==='dark'?'☀️':'🌙';}syncTheme();` +
+		`window.tmToggleTheme=function(){var n=(d.dataset.theme==='dark')?'light':'dark';d.dataset.theme=n;localStorage.setItem('tm-theme',n);syncTheme();};` +
+		`window.tmSetLang=function(l){document.cookie='tm-lang='+l+';path=/;max-age=2592000';location.reload();};` +
+		`var ar=localStorage.getItem('tm-autorefresh');function syncAuto(){var b=document.getElementById('tm-autorefresh');if(b){b.style.opacity=ar==='1'?'1':'.4';b.style.background=ar==='1'?'var(--primary-50)':'var(--card)';}}syncAuto();` +
+		`if(ar==='1'){setTimeout(function(){location.reload();},60000);}` +
+		`window.tmToggleAuto=function(){var n=localStorage.getItem('tm-autorefresh')==='1'?'0':'1';localStorage.setItem('tm-autorefresh',n);location.reload();};` +
+		`})();</script>`
+	favicon := `<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314b8a6'/%3E%3Ctext x='16' y='23' font-size='16' font-weight='bold' fill='white' text-anchor='middle' font-family='sans-serif'%3ETM%3C/text%3E%3C/svg%3E">`
+	return fmt.Sprintf(`<!doctype html><html lang="%s"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">%s<title>%s · TransitMonitor</title><style>%s</style></head>`+
 		`<body><header class="top"><div class="top-row"><div class="brand"><span class="logo">TM</span>TransitMonitor</div><nav>%s</nav>%s</div></header>`+
 		`<main>%s</main><footer>TransitMonitor · <a href="/api/stations">JSON API</a> · <a href="/metrics">/metrics</a> · <a href="/healthz">/healthz</a></footer>%s</body></html>`,
-		lang, html.EscapeString(title), appCSS, n.String(), tools, body, js)
+		lang, favicon, html.EscapeString(title), appCSS, n.String(), tools, body, js)
 }
 
 func writeHTMLShell(w http.ResponseWriter, lang, title, active, body string) {

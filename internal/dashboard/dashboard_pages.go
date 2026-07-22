@@ -142,6 +142,10 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
 	model := r.URL.Query().Get("model")
+	field := r.URL.Query().Get("field")
+	if field == "" {
+		field = "input"
+	}
 	ctx := r.Context()
 	type cell struct {
 		input, output float64
@@ -158,7 +162,7 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if _, ok := m[o.ModelName]; !ok {
-				m[o.ModelName] = cell{o.InputUSDPer1M, o.OutputUSDPer1M, o.Sentinel, true}
+				m[o.ModelName] = cell{fieldVal(field, o), 0, o.Sentinel, true}
 				modelSet[o.ModelName] = true
 			}
 		}
@@ -229,3 +233,16 @@ func fmtTime(t time.Time) string {
 
 func fmtUSD(v float64) string { return fmt.Sprintf("%.4f", v) }
 func fmtPct(v float64) string { return fmt.Sprintf("%.2f%%", v) }
+
+func fieldVal(field string, o domain.RatioObservation) float64 {
+	switch field {
+	case "output":
+		return o.OutputUSDPer1M
+	case "cache_read":
+		return o.CacheReadUSDPer1M
+	case "cache_write":
+		return o.CacheWriteUSDPer1M
+	default:
+		return o.InputUSDPer1M
+	}
+}

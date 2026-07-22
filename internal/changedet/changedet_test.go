@@ -143,3 +143,17 @@ func eq(a, b float64) bool {
 	}
 	return d < 1e-9
 }
+
+func BenchmarkDiff(b *testing.B) {
+	prev := make([]domain.RatioObservation, 50)
+	curr := make([]domain.RatioObservation, 50)
+	for i := range prev {
+		prev[i] = domain.RatioObservation{GroupName: "default", ModelName: "model-" + string(rune('a'+i%26)), InputUSDPer1M: float64(i)}
+		curr[i] = domain.RatioObservation{GroupName: "default", ModelName: "model-" + string(rune('a'+i%26)), InputUSDPer1M: float64(i) * 1.1}
+	}
+	cfg := DefaultConfig()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Diff(prev, curr, cfg)
+	}
+}

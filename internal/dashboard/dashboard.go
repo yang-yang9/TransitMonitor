@@ -34,6 +34,7 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Use(s.authMiddleware)
 	r.Get("/healthz", s.healthz)
 	r.Get("/metrics", s.metricsHandler)
+	r.Get("/readyz", s.readyz)
 	r.Get("/", s.overviewHTML)
 	r.Get("/changes", s.changesHTML)
 	r.Get("/probes", s.probesHTML)
@@ -78,7 +79,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/metrics" || r.URL.Path == "/readyz" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -174,11 +175,13 @@ func (s *Server) auditJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 type matrixCell struct {
-	StationID      string  `json:"station_id"`
-	Model          string  `json:"model"`
-	InputUSDPer1M  float64 `json:"input_usd_per_1m"`
-	OutputUSDPer1M float64 `json:"output_usd_per_1m"`
-	Sentinel       string  `json:"sentinel,omitempty"`
+	StationID          string  `json:"station_id"`
+	Model              string  `json:"model"`
+	InputUSDPer1M      float64 `json:"input_usd_per_1m"`
+	OutputUSDPer1M     float64 `json:"output_usd_per_1m"`
+	CacheReadUSDPer1M  float64 `json:"cache_read_usd_per_1m,omitempty"`
+	CacheWriteUSDPer1M float64 `json:"cache_write_usd_per_1m,omitempty"`
+	Sentinel           string  `json:"sentinel,omitempty"`
 }
 
 func (s *Server) matrixJSON(w http.ResponseWriter, r *http.Request) {
@@ -196,11 +199,33 @@ func (s *Server) matrixJSON(w http.ResponseWriter, r *http.Request) {
 			cells = append(cells, matrixCell{
 				StationID: st.ID, Model: o.ModelName,
 				InputUSDPer1M: o.InputUSDPer1M, OutputUSDPer1M: o.OutputUSDPer1M,
+				CacheReadUSDPer1M: o.CacheReadUSDPer1M, CacheWriteUSDPer1M: o.CacheWriteUSDPer1M,
 				Sentinel: o.Sentinel,
 			})
 		}
 	}
+	if r.URL.Query().Get("format") == "csv" {
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", "attachment; filename=matrix.csv")
+		var b strings.Builder
+		b.WriteString("station,model,input_usd_per_1m,output_usd_per_1m,cache_read,cache_write,sentinel\n")
+		for _, c := range cells {
+			fmt.Fprintf(&b, "%s,%s,%v,%v,%v,%v,%s\n", c.StationID, c.Model,
+				c.InputUSDPer1M, c.OutputUSDPer1M, c.CacheReadUSDPer1M, c.CacheWriteUSDPer1M, c.Sentinel)
+		}
+		_, _ = w.Write([]byte(b.String()))
+		return
+	}
 	writeJSON(w, 200, cells)
+}
+
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	_, err := s.store.ListAuditLogs(r.Context(), 1)
+	if err != nil {
+		writeJSON(w, 503, map[string]string{"status": "not ready", "error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ready"})
 }
 
 // overviewHTML renders station cards + quick links.

@@ -233,3 +233,18 @@ func TestSub2APINormalize(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkNewAPINormalize(b *testing.B) {
+	data := NewAPIRatioData{
+		QuotaPerUnit:  500000,
+		TopGroupRatio: map[string]float64{"default": 1.0, "vip": 0.8},
+		Models:        make([]NewAPIModel, 100),
+	}
+	for i := range data.Models {
+		data.Models[i] = NewAPIModel{Name: "model-" + string(rune('a'+i%26)), ModelRatio: 1.25, CompletionRatio: ptr(4), Group: "default", KnownRatio: true}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		NewAPINormalize(data)
+	}
+}
