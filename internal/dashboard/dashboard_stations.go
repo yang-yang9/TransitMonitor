@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -85,11 +87,13 @@ func (s *Server) stationEditHTML(w http.ResponseWriter, r *http.Request) {
 // PUT handler keeps the existing secret for any blank field.
 func stationForm(lang string, edit *domain.Station) string {
 	method, action, idVal, idRO, title, submit := "POST", "/api/stations", "", "", t(lang, "title.newstation"), t(lang, "form.add")
+	idRequired, idPH := "", t(lang, "form.id.auto")
 	nameVal, baseVal, groupVal, pollVal, apiVal, patVal, jwtVal, checked := "", "", "default", "3m", "", "", "", "checked"
 	kindNew, kindSub := "selected", ""
 	apiPH, patPH, jwtPH := "sk-...", "new-api PAT", "sub2api user JWT"
 	if edit != nil {
 		method, action, idVal, idRO, title, submit = "PUT", "/api/stations/"+edit.ID, edit.ID, "readonly", t(lang, "title.editstation"), t(lang, "form.save")
+		idRequired, idPH = "required", ""
 		nameVal, baseVal, pollVal = edit.Name, edit.BaseURL, time.Duration(edit.PollInterval).String()
 		groupVal = edit.Auth.Group
 		if groupVal == "" {
@@ -111,7 +115,7 @@ func stationForm(lang string, edit *domain.Station) string {
 <div class="card">
 <form id="stform" onsubmit="return tmSubmit('` + method + `','` + action + `')">
   <div class="grid">
-    <label>` + t(lang, "form.id") + `<input name="id" required value="` + esc(idVal) + `" ` + idRO + `></label>
+    <label>` + t(lang, "form.id") + `<input name="id" ` + idRequired + ` value="` + esc(idVal) + `" placeholder="` + esc(idPH) + `" ` + idRO + `></label>
     <label>` + t(lang, "form.name") + `<input name="name" required value="` + esc(nameVal) + `"></label>
     <label>` + t(lang, "form.baseurl") + `<input name="base_url" required value="` + esc(baseVal) + `" placeholder="https://relay.example.com"></label>
     <label>` + t(lang, "form.kind") + `<select name="kind"><option value="newapi" ` + kindNew + `>newapi</option><option value="sub2api" ` + kindSub + `>sub2api</option></select></label>
@@ -171,9 +175,22 @@ func (s *Server) stationsCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if in.ID == "" || in.BaseURL == "" || in.Kind == "" {
-		http.Error(w, "id, base_url, kind required", http.StatusBadRequest)
+	if in.BaseURL == "" || in.Kind == "" {
+		http.Error(w, "base_url, kind required", http.StatusBadRequest)
 		return
+	}
+	if in.ID == "" {
+		for i := 0; i < 8; i++ {
+			cand := genStationID()
+			if _, ok := s.findStation(cand); !ok {
+				in.ID = cand
+				break
+			}
+		}
+		if in.ID == "" {
+			http.Error(w, "could not generate unique station id", http.StatusInternalServerError)
+			return
+		}
 	}
 	st, err := in.toStation()
 	if err != nil {
@@ -223,6 +240,13 @@ func (s *Server) stationsUpsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"id": st.ID, "status": "upserted"})
+}
+
+// genStationID returns a short URL-safe random id (st-<8hex>).
+func genStationID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return "st-" + hex.EncodeToString(b)
 }
 
 // DELETE /api/stations/{id}
