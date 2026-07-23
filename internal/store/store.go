@@ -180,6 +180,45 @@ func (s *Store) LatestRatioObservations(ctx context.Context, stationID string) (
 	return out, rows.Err()
 }
 
+// PrevPollObservations returns the observations from the most recent single poll
+// (i.e. all rows sharing the latest observed_at timestamp). Unlike
+// LatestRatioObservations (which scans the full history and returns one row per
+// group+model ever seen), this returns exactly what the previous poll wrote —
+// so models that were already removed won't appear in the result set.
+func (s *Store) PrevPollObservations(ctx context.Context, stationID string) ([]domain.RatioObservation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT
+		station_id, group_name, model_name, native_ratio, native_ratio_kind, quota_type,
+		input_usd_per_1m, output_usd_per_1m, cache_read_usd_per_1m, cache_write_usd_per_1m,
+		fixed_price_usd, completion_ratio, peak_info, declared_unavailable, sentinel, note,
+		observed_at, source_endpoint
+		FROM ratio_observations
+		WHERE station_id=? AND observed_at = (
+			SELECT MAX(observed_at) FROM ratio_observations WHERE station_id=?
+		)`, stationID, stationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.RatioObservation
+	for rows.Next() {
+		var o domain.RatioObservation
+		var du int
+		var ts int64
+		if err := rows.Scan(
+			&o.StationID, &o.GroupName, &o.ModelName, &o.NativeRatio, &o.NativeRatioKind, &o.QuotaType,
+			&o.InputUSDPer1M, &o.OutputUSDPer1M, &o.CacheReadUSDPer1M, &o.CacheWriteUSDPer1M,
+			&o.FixedPriceUSD, &o.CompletionRatio, &o.PeakInfo, &du, &o.Sentinel, &o.Note,
+			&ts, &o.SourceEndpoint,
+		); err != nil {
+			return nil, err
+		}
+		o.DeclaredUnavailable = du == 1
+		o.ObservedAt = time.Unix(ts, 0).Local()
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
 // InsertChangeEvents stores a batch of change events.
 func (s *Store) InsertChangeEvents(ctx context.Context, events []domain.ChangeEvent) error {
 	tx, err := s.db.BeginTx(ctx, nil)

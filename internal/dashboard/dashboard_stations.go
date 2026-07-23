@@ -223,7 +223,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			modelChangeRows = append(modelChangeRows, []string{
 				`<span class="mono">` + fmtTime(e.ObservedAt) + `</span>`,
 				`<span class="mono">` + esc(e.Model) + `</span>`,
-				`<span class="tag">` + esc(e.Field) + `</span>`,
+				`<span class="tag">` + fmtField(lang, e.Field) + `</span>`,
 				`<span class="num">` + fmtPct(e.DeltaPct) + `</span>`,
 				severityBadge(lang, e.Severity),
 			})

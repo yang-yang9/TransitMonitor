@@ -192,7 +192,7 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 	if a == nil {
 		return fmt.Errorf("unknown station %s", stationID)
 	}
-	prev, err := s.Store.LatestRatioObservations(ctx, stationID)
+	prev, err := s.Store.PrevPollObservations(ctx, stationID)
 	if err != nil {
 		return err
 	}

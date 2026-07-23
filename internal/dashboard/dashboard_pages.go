@@ -113,9 +113,9 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 			`<span class="mono">` + fmtTime(e.ObservedAt) + `</span>`,
 			grpCell,
 			`<span class="mono">` + esc(e.Model) + `</span>`,
-			`<span class="tag">` + esc(e.Field) + `</span>`,
-			`<span class="mono">` + esc(e.Old) + `</span>`,
-			`<span class="mono b-strong">` + esc(e.New) + `</span>`,
+			`<span class="tag">` + fmtField(lang, e.Field) + `</span>`,
+			`<span class="mono">` + esc(fmtChangeVal(lang, e.Old)) + `</span>`,
+			`<span class="mono b-strong">` + esc(fmtChangeVal(lang, e.New)) + `</span>`,
 			`<span class="num">` + fmtPct(e.DeltaPct) + `</span>`,
 			severityBadge(lang, e.Severity),
 		})
@@ -438,6 +438,20 @@ func fmtTime(t time.Time) string {
 	// Render in the process timezone (set from config.timezone, default
 	// Asia/Shanghai) so operators see wall-clock Beijing time, not UTC.
 	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+func fmtField(lang, field string) string {
+	if v := t(lang, "field."+field); v != "field."+field {
+		return v
+	}
+	return field
+}
+
+func fmtChangeVal(lang, val string) string {
+	if v := t(lang, "val."+val); v != "val."+val {
+		return v
+	}
+	return val
 }
 
 func fmtUSD(v float64) string { return fmt.Sprintf("%.4f", v) }
