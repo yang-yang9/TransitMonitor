@@ -15,7 +15,7 @@ func TestFetchRatios_MalformedJSON(t *testing.T) {
 		w.Write([]byte(`{not valid json`))
 	}))
 	defer srv.Close()
-	a := New("s1", srv.URL, "", "sk-test", "default", srv.Client())
+	a := New("s1", srv.URL, "", "", "sk-test", "default", srv.Client())
 	a.SetClock(func() time.Time { return time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC) })
 	caps, _ := a.ProbeCapabilities(context.Background())
 	_, _, err := a.FetchRatios(context.Background(), caps)
@@ -29,7 +29,7 @@ func TestFetchRatios_ServerError(t *testing.T) {
 		w.WriteHeader(500)
 	}))
 	defer srv.Close()
-	a := New("s1", srv.URL, "", "sk-test", "default", srv.Client())
+	a := New("s1", srv.URL, "", "", "sk-test", "default", srv.Client())
 	a.SetClock(func() time.Time { return time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC) })
 	caps, _ := a.ProbeCapabilities(context.Background())
 	_, _, err := a.FetchRatios(context.Background(), caps)
@@ -39,7 +39,7 @@ func TestFetchRatios_ServerError(t *testing.T) {
 }
 
 func TestProbeCapabilities_ConnectionRefused(t *testing.T) {
-	a := New("s1", "http://127.0.0.1:1", "", "sk-test", "default", &http.Client{Timeout: 100 * time.Millisecond})
+	a := New("s1", "http://127.0.0.1:1", "", "", "sk-test", "default", &http.Client{Timeout: 100 * time.Millisecond})
 	caps, err := a.ProbeCapabilities(context.Background())
 	// connection refused should not panic, should return caps with all-false
 	if err != nil {

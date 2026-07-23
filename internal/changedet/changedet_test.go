@@ -29,7 +29,7 @@ func findEvent(ev []domain.ChangeEvent, field string) (domain.ChangeEvent, bool)
 func TestDiff_ValueChangeCritical(t *testing.T) {
 	prev := []domain.RatioObservation{obs("default", "gpt-4o", 2.0, 10, 1.25, "")}
 	curr := []domain.RatioObservation{obs("default", "gpt-4o", 2.5, 10, 1.25, "")}
-	ev := Diff(prev, curr, DefaultConfig())
+	ev := Diff(prev, curr, nil, nil, DefaultConfig())
 	if e, ok := findEvent(ev, FieldInput); !ok {
 		t.Fatalf("want input change event, got %v", ev)
 	} else {
@@ -54,7 +54,7 @@ func TestDiff_ModelAdded(t *testing.T) {
 		obs("default", "gpt-4o", 2.5, 10, 1.25, ""),
 		obs("default", "new-model", 3.0, 12, 1.5, ""),
 	}
-	ev := Diff(prev, curr, DefaultConfig())
+	ev := Diff(prev, curr, nil, nil, DefaultConfig())
 	e, ok := findEvent(ev, FieldPresence)
 	if !ok {
 		t.Fatalf("want presence event, got %v", ev)
@@ -73,7 +73,7 @@ func TestDiff_ModelRemoved(t *testing.T) {
 		obs("default", "gone", 3.0, 12, 1.5, ""),
 	}
 	curr := []domain.RatioObservation{obs("default", "gpt-4o", 2.5, 10, 1.25, "")}
-	ev := Diff(prev, curr, DefaultConfig())
+	ev := Diff(prev, curr, nil, nil, DefaultConfig())
 	e, ok := findEvent(ev, FieldPresence)
 	if !ok {
 		t.Fatalf("want presence event, got %v", ev)
@@ -86,7 +86,7 @@ func TestDiff_ModelRemoved(t *testing.T) {
 func TestDiff_SentinelFlip(t *testing.T) {
 	prev := []domain.RatioObservation{obs("default", "m", 2.0, 8, 2.0, "")}
 	curr := []domain.RatioObservation{obs("default", "m", 0, 0, 37.5, "unconfigured-37.5")}
-	ev := Diff(prev, curr, DefaultConfig())
+	ev := Diff(prev, curr, nil, nil, DefaultConfig())
 	e, ok := findEvent(ev, FieldSentinelFlip)
 	if !ok {
 		t.Fatalf("want sentinel_flip event, got %v", ev)
@@ -102,7 +102,7 @@ func TestDiff_SentinelFlip(t *testing.T) {
 
 func TestDiff_Idempotent(t *testing.T) {
 	snap := []domain.RatioObservation{obs("default", "gpt-4o", 2.5, 10, 1.25, "")}
-	ev := Diff(snap, snap, DefaultConfig())
+	ev := Diff(snap, snap, nil, nil, DefaultConfig())
 	if len(ev) != 0 {
 		t.Errorf("identical snapshots must produce 0 events, got %d: %v", len(ev), ev)
 	}
@@ -111,7 +111,7 @@ func TestDiff_Idempotent(t *testing.T) {
 func TestDiff_ExcludedRowsNoValueChange(t *testing.T) {
 	prev := []domain.RatioObservation{obs("default", "dall-e-3", 0, 0, 0.04, "fixed-price (per-call)")}
 	curr := []domain.RatioObservation{obs("default", "dall-e-3", 0, 0, 0.05, "fixed-price (per-call)")}
-	ev := Diff(prev, curr, DefaultConfig())
+	ev := Diff(prev, curr, nil, nil, DefaultConfig())
 	if len(ev) != 0 {
 		t.Errorf("excluded (fixed-price) rows must not produce value-change events, got %v", ev)
 	}
@@ -121,7 +121,7 @@ func TestDiff_SeverityLevels(t *testing.T) {
 	// 10% → warning, 30% → critical
 	prev := []domain.RatioObservation{obs("g", "a", 1.0, 0, 0, ""), obs("g", "b", 1.0, 0, 0, "")}
 	curr := []domain.RatioObservation{obs("g", "a", 1.1, 0, 0, ""), obs("g", "b", 1.3, 0, 0, "")}
-	ev := Diff(prev, curr, DefaultConfig())
+	ev := Diff(prev, curr, nil, nil, DefaultConfig())
 	byModel := map[string]domain.ChangeEvent{}
 	for _, e := range ev {
 		if e.Field == FieldInput {
@@ -144,6 +144,56 @@ func eq(a, b float64) bool {
 	return d < 1e-9
 }
 
+func TestDiff_GroupRatioChanges(t *testing.T) {
+	prev := map[string]float64{"vip": 0.05, "gptpro": 0.12}
+	curr := map[string]float64{"vip": 0.09, "gptpro": 0.12, "team": 0.05}
+	ev := Diff(nil, nil, prev, curr, DefaultConfig())
+	// vip: 0.05→0.09 = +80% → critical; team: new → info; gptpro unchanged → none
+	if len(ev) != 2 {
+		t.Fatalf("want 2 group-ratio events, got %d: %+v", len(ev), ev)
+	}
+	byGroup := map[string]domain.ChangeEvent{}
+	for _, e := range ev {
+		if e.Field != FieldGroupRatio {
+			t.Errorf("event field should be group_ratio, got %s", e.Field)
+		}
+		byGroup[e.Group] = e
+	}
+	vip, ok := byGroup["vip"]
+	if !ok {
+		t.Fatal("vip event missing")
+	}
+	if !eq(vip.DeltaPct, 80) {
+		t.Errorf("vip delta%%: want 80, got %v", vip.DeltaPct)
+	}
+	if vip.Severity != SevCritical {
+		t.Errorf("vip +80%% should be critical, got %s", vip.Severity)
+	}
+	if vip.Old != "0.05" || vip.New != "0.09" {
+		t.Errorf("vip old/new: want 0.05→0.09, got %s→%s", vip.Old, vip.New)
+	}
+	team, ok := byGroup["team"]
+	if !ok {
+		t.Fatal("team event missing")
+	}
+	if team.Severity != SevInfo {
+		t.Errorf("new group team should be info, got %s", team.Severity)
+	}
+	if _, ok := byGroup["gptpro"]; ok {
+		t.Error("gptpro unchanged should not emit an event")
+	}
+}
+
+func TestDiff_GroupRatioNil(t *testing.T) {
+	// nil prev + curr → no events; nil curr → no events.
+	if ev := Diff(nil, nil, map[string]float64{"vip": 0.05}, nil, DefaultConfig()); len(ev) != 0 {
+		t.Errorf("nil curr group should emit 0 events, got %d", len(ev))
+	}
+	if ev := Diff(nil, nil, nil, nil, DefaultConfig()); len(ev) != 0 {
+		t.Errorf("nil groups should emit 0 events, got %d", len(ev))
+	}
+}
+
 func BenchmarkDiff(b *testing.B) {
 	prev := make([]domain.RatioObservation, 50)
 	curr := make([]domain.RatioObservation, 50)
@@ -154,6 +204,6 @@ func BenchmarkDiff(b *testing.B) {
 	cfg := DefaultConfig()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		Diff(prev, curr, cfg)
+		Diff(prev, curr, nil, nil, cfg)
 	}
 }

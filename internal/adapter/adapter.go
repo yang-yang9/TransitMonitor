@@ -26,7 +26,7 @@ type Adapter interface {
 func NewAdapter(s domain.Station, client *http.Client) (Adapter, error) {
 	switch s.Kind {
 	case domain.KindNewAPI:
-		return newapi.New(s.ID, s.BaseURL, s.Auth.PAT, s.Auth.APIKey, s.Auth.Group, client), nil
+		return newapi.New(s.ID, s.BaseURL, s.Auth.PAT, s.Auth.UserID, s.Auth.APIKey, s.Auth.Group, client), nil
 	case domain.KindSub2API:
 		return sub2api.New(s.ID, s.BaseURL, s.Auth.APIKey, s.Auth.JWT, s.Auth.AdminAPIKey, s.Auth.Group, client), nil
 	default:

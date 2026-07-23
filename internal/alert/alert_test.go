@@ -50,6 +50,22 @@ func TestEvaluate_ModelAdded(t *testing.T) {
 	}
 }
 
+func TestEvaluate_GroupRatioDeltaPct(t *testing.T) {
+	rules := []Rule{{Name: "grp", Type: RuleGroupRatioDeltaPct, Threshold: 20, Enabled: true}}
+	events := []domain.ChangeEvent{
+		{Field: domain.FieldGroupRatio, Group: "vip", Old: "0.05", New: "0.09", DeltaPct: 80, StationID: "s1", Severity: "critical", ObservedAt: alertTime},
+		{Field: domain.FieldGroupRatio, Group: "team", DeltaPct: 5, StationID: "s1", Severity: "info", ObservedAt: alertTime}, // below threshold
+		{Field: domain.FieldInput, DeltaPct: 90, StationID: "s1", Model: "m", ObservedAt: alertTime},                          // wrong field
+	}
+	got := Evaluate(rules, events, nil)
+	if len(got) != 1 {
+		t.Fatalf("want 1 alert (only vip), got %d", len(got))
+	}
+	if got[0].Payload["group"] != "vip" {
+		t.Errorf("alert should carry group=vip, got %v", got[0].Payload["group"])
+	}
+}
+
 func TestEvaluate_ProbeMarkup(t *testing.T) {
 	rules := []Rule{{Name: "r", Type: RuleProbeMarkupPct, Threshold: 5, Enabled: true}}
 	probes := []domain.ProbeResult{

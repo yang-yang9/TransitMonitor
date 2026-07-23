@@ -21,6 +21,7 @@
 | `/v1/models` | GET | sk-key(TokenAuth) | 模型清单（无倍率） | `controller/model.go:208` |
 
 - `/api/pricing` 只含**已启用通道的模型**；60s 服务端缓存；`pricing_version` 是**假常量**（`model/pricing.go:414`），禁止用于变更检测。
+- ⚠ `/api/ratio_config` 与 `/api/option/` 返回**所有已配置模型**——含 new-api 内置 `defaultModelRatio` 全量（`setting/ratio_setting/model_ratio.go:338` `modelRatioMap.AddAll(defaultModelRatio)`，一个 stock 安装约 2500 条），**并非站点实际启用的模型**。启用模型集合只能从 `/api/pricing`（pricing 模块公开或 PAT 满足其 `UserAuth` 闸）或 `/v1/models`（sk-key）获知；二者皆不可用时 `newapi.Adapter` **拒绝写入**并给出修复指引，避免把内置默认清单（"两千多个模型"）当作站点目录灌库。
 - `Pricing` DTO 字段：`quota_type`(0=per-token,1=fixed)、`model_ratio`、`model_price`、`completion_ratio`、`cache_ratio*`、`create_cache_ratio*`、`image_ratio`、`audio_ratio`。
 
 ### 鉴权

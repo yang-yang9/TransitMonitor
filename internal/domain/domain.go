@@ -24,6 +24,7 @@ const (
 	FieldNative       = "native_ratio"
 	FieldPresence     = "presence"
 	FieldSentinelFlip = "sentinel_flip"
+	FieldGroupRatio   = "group_ratio"
 )
 
 // Severity values.
@@ -38,6 +39,7 @@ const (
 type AuthConfig struct {
 	// new-api
 	PAT    string `yaml:"pat,omitempty" json:"-"`     // system access token (UserAuth/Admin/Root)
+	UserID string `yaml:"user_id,omitempty" json:"-"` // New-Api-User header value (required by some forks)
 	APIKey string `yaml:"api_key,omitempty" json:"-"` // sk- key for /v1/* + probe
 	// sub2api
 	AdminAPIKey string `yaml:"admin_api_key,omitempty" json:"-"` // x-api-key admin mode
@@ -131,6 +133,14 @@ type RawSnapshot struct {
 	EndpointStatuses []EndpointStatus
 	RawPayloads      map[string][]byte // path → raw body
 	Capabilities     CapabilityReport
+	GroupRatios      map[string]float64 // group_name → ratio (from /api/pricing or /api/user/self/groups)
+}
+
+// GroupRatioSnapshot is one point in a station's group-ratio time series
+// (reconstructed from snapshots.capabilities) — used for trend sparklines.
+type GroupRatioSnapshot struct {
+	ObservedAt time.Time
+	Ratios     map[string]float64
 }
 
 // RatioObservation is the normalized, comparable per-(station,group,model) record.

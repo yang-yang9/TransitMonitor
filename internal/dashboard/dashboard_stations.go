@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,7 +53,7 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 		if !st.Enabled {
 			enabled = `<span class="badge b-muted">—</span>`
 		}
-		edit := `<a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
+		edit := `<a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a> <button class="btn btn-outline btn-sm" onclick="fetch('/api/stations/` + esc(st.ID) + `/poll',{method:'POST'}).then(function(){location.reload();})">🔄 ` + t(lang, "form.poll") + `</button>`
 		del := `<button class="btn btn-danger btn-sm" onclick="tmDel('` + esc(st.ID) + `')">` + t(lang, "form.delete") + `</button>`
 		rows = append(rows, []string{
 			`<span class="mono">` + esc(st.ID) + `</span>`, esc(st.Name),
@@ -78,29 +79,62 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	// ratios
+	// group ratios (loaded early so the ratios table can show per-row group_ratio)
+	groupRatios, _ := s.store.LatestGroupRatios(ctx, id)
+	// ratios — sorted by group then cheapest effective-input first; with a
+	// visual bar on the effective ratio so magnitude is readable at a glance.
 	obs, _ := s.store.LatestRatioObservations(ctx, id)
-	ratioRows := make([][]string, 0, len(obs))
+	type rob struct {
+		o             domain.RatioObservation
+		gr            float64
+		cr            float64
+		effIn, effOut float64
+	}
+	rows := make([]rob, 0, len(obs))
+	maxOut := 0.0
 	for _, o := range obs {
+		gr, hasGR := groupRatios[o.GroupName]
+		if !hasGR {
+			gr = 1.0
+		}
+		cr := o.CompletionRatio
+		if cr == 0 {
+			cr = 1.0
+		}
+		ei := o.NativeRatio * gr
+		eo := o.NativeRatio * cr * gr
+		if eo > maxOut {
+			maxOut = eo
+		}
+		rows = append(rows, rob{o, gr, cr, ei, eo})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].o.GroupName != rows[j].o.GroupName {
+			return rows[i].o.GroupName < rows[j].o.GroupName
+		}
+		return rows[i].effIn < rows[j].effIn
+	})
+	ratioRows := make([][]string, 0, len(rows))
+	prevGroup := ""
+	for _, r := range rows {
+		_ = prevGroup // grouping handled in renderRatioTable via GroupName changes
+		pct := 0.0
+		if maxOut > 0 {
+			pct = r.effOut / maxOut * 100
+		}
+		effCell := fmt.Sprintf(`<div class="rat-bar"><span class="rb-fill" style="width:%.1f%%"></span></div>`, pct) +
+			`<span class="num mono b-strong">` + fmt.Sprintf("%.4f", r.effIn) + ` / ` + fmt.Sprintf("%.4f", r.effOut) + `</span>`
 		ratioRows = append(ratioRows, []string{
-			esc(o.GroupName), `<span class="mono">` + esc(o.ModelName) + `</span>`,
-			`<span class="num mono">` + fmtUSD(o.InputUSDPer1M) + `</span>`,
-			`<span class="num mono">` + fmtUSD(o.OutputUSDPer1M) + `</span>`,
-			statusBadge(lang, o.Sentinel),
+			esc(r.o.GroupName), `<span class="mono">` + esc(r.o.ModelName) + `</span>`,
+			`<span class="num mono">` + fmt.Sprintf("%.4f", r.o.NativeRatio) + `</span>`,
+			`<span class="num mono">` + fmt.Sprintf("%.4f", r.cr) + `</span>`,
+			`<span class="num mono">` + fmt.Sprintf("%.2fx", r.gr) + `</span>`,
+			effCell,
+			statusBadge(lang, r.o.Sentinel),
 		})
 	}
 	// changes
 	evs, _ := s.store.ListChangeEvents(ctx, id, 20)
-	changeRows := make([][]string, 0, len(evs))
-	for _, e := range evs {
-		changeRows = append(changeRows, []string{
-			`<span class="mono">` + fmtTime(e.ObservedAt) + `</span>`,
-			`<span class="mono">` + esc(e.Model) + `</span>`,
-			`<span class="tag">` + esc(e.Field) + `</span>`,
-			`<span class="num">` + fmtPct(e.DeltaPct) + `</span>`,
-			severityBadge(lang, e.Severity),
-		})
-	}
 	// probes
 	prs, _ := s.store.ListProbeResults(ctx, id, 20)
 	probeRows := make([][]string, 0, len(prs))
@@ -125,13 +159,89 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 	if pollErrs > 0 {
 		uptime = fmt.Sprintf("%d errors", pollErrs)
 	}
+	// HERO: large group-ratio bar chart.
+	heroChart := groupRatioChart(groupRatios, true)
+	// group-ratio trend sparklines: per group, ratio over recent snapshots.
+	var trendHTML string
+	if hist, _ := s.store.GroupRatioHistory(ctx, id, 24); len(hist) >= 2 {
+		// collect per-group series
+		type series struct{ vals []float64 }
+		gSer := map[string]*series{}
+		order := []string{}
+		for _, h := range hist {
+			for g, v := range h.Ratios {
+				if _, ok := gSer[g]; !ok {
+					gSer[g] = &series{}
+					order = append(order, g)
+				}
+				gSer[g].vals = append(gSer[g].vals, v)
+			}
+		}
+		sort.Strings(order)
+		trendHTML = `<h2>` + t(lang, "section.grouptrend") + `</h2><div class="spark-grid">`
+		for _, g := range order {
+			vals := gSer[g].vals
+			cur := vals[len(vals)-1]
+			// delta vs the previous snapshot's ratio for this group
+			deltaStr := ""
+			if len(vals) >= 2 {
+				pv := vals[len(vals)-2]
+				if pv != 0 {
+					dp := (cur - pv) / pv * 100
+					sign := "+"
+					cls := "b-cheap"
+					if dp < 0 {
+						sign = ""
+						cls = "b-cheap"
+					} else if dp > 0 {
+						cls = "b-warn"
+					}
+					_ = cls
+					deltaStr = fmt.Sprintf(`<span class="sc-delta badge-sm b-warn">%s%.1f%%</span>`, sign, dp)
+				}
+			}
+			svg := sparklineSVG(vals, 120, 32)
+			trendHTML += fmt.Sprintf(`<div class="spark-cell"><div class="sc-hdr"><span class="sc-name" title="%s">%s</span><span class="sc-val">%.2fx</span></div>%s%s</div>`,
+				esc(g), esc(g), cur, svg, deltaStr)
+		}
+		trendHTML += `</div>`
+	}
+	// group-ratio changes section.
+	var groupChangeRows [][]string
+	var modelChangeRows [][]string
+	for _, e := range evs {
+		if e.Field == domain.FieldGroupRatio {
+			groupChangeRows = append(groupChangeRows, []string{
+				`<span class="mono">` + fmtTime(e.ObservedAt) + `</span>`,
+				`<span class="grp-tag">` + esc(e.Group) + `</span>`,
+				`<span class="num mono">` + esc(e.Old) + `</span>`,
+				`<span class="num mono b-strong">` + esc(e.New) + `</span>`,
+				`<span class="num">` + fmtPct(e.DeltaPct) + `</span>`,
+				severityBadge(lang, e.Severity),
+			})
+		} else {
+			modelChangeRows = append(modelChangeRows, []string{
+				`<span class="mono">` + fmtTime(e.ObservedAt) + `</span>`,
+				`<span class="mono">` + esc(e.Model) + `</span>`,
+				`<span class="tag">` + esc(e.Field) + `</span>`,
+				`<span class="num">` + fmtPct(e.DeltaPct) + `</span>`,
+				severityBadge(lang, e.Severity),
+			})
+		}
+	}
 	info := `<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span> ` + esc(st.BaseURL) +
 		` <span class="badge b-warn">⚠ ` + uptime + `</span>` +
 		` <a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
 	body := `<div class="page-hdr"><h1>` + esc(st.Name) + `</h1><p class="sub">` + info + `</p></div>` +
-		`<h2>` + t(lang, "section.ratios") + `</h2>` + renderTable(lang, []string{t(lang, "col.group"), t(lang, "col.model"), "input $/M", "output $/M", "trend", t(lang, "col.status")}, ratioRows) +
-		`<h2>` + t(lang, "title.changes") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, changeRows) +
-		`<h2>` + t(lang, "title.probes") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probeRows)
+		heroChart +
+		trendHTML +
+		`<h2>` + t(lang, "section.groupchanges") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.oldratio"), t(lang, "col.newratio"), t(lang, "col.deltapct"), t(lang, "col.severity")}, groupChangeRows) +
+		`<details class="sec"><summary>` + t(lang, "expand.models") + ` (` + fmt.Sprintf("%d", len(ratioRows)) + `)</summary>` +
+		renderRatioTable([]string{t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.modelratio"), t(lang, "col.completionratio"), t(lang, "col.groupratio"), t(lang, "col.effratio"), t(lang, "col.status")}, ratioRows) + `</details>` +
+		`<details class="sec"><summary>` + t(lang, "expand.modelchanges") + ` (` + fmt.Sprintf("%d", len(modelChangeRows)) + `)</summary>` +
+		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, modelChangeRows) + `</details>` +
+		`<details class="sec"><summary>` + t(lang, "expand.probes") + ` (` + fmt.Sprintf("%d", len(probeRows)) + `)</summary>` +
+		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probeRows) + `</details>`
 	writeHTMLShell(w, lang, esc(st.Name), "stations", body)
 }
 
@@ -161,6 +271,7 @@ func stationForm(lang string, edit *domain.Station) string {
 	nameVal, baseVal, groupVal, pollVal := "", "", "default", "3m"
 	kindNew, kindSub := "selected", ""
 	apiPH, patPH, jwtPH := "sk-...", "new-api PAT", "sub2api user JWT"
+	userIDVal, userIDPH := "", "new-api user ID (for New-Api-User header)"
 	checkedAttr := "checked"
 	if edit != nil {
 		method, action, idVal, idRO, title, submit = "PUT", "/api/stations/"+edit.ID, edit.ID, "readonly", t(lang, "title.editstation"), t(lang, "form.save")
@@ -181,6 +292,8 @@ func stationForm(lang string, edit *domain.Station) string {
 			checkedAttr = "checked"
 		}
 		apiPH, patPH, jwtPH = t(lang, "form.keepblank"), t(lang, "form.keepblank"), t(lang, "form.keepblank")
+		userIDVal = edit.Auth.UserID
+		userIDPH = t(lang, "form.keepblank")
 	}
 	return `<div class="form-wrap"><div class="page-hdr"><h1>` + title + `</h1></div>
 <div class="card">
@@ -196,6 +309,7 @@ func stationForm(lang string, edit *domain.Station) string {
     <hr class="form-sep">
     <div class="field"><span class="field-label">` + t(lang, "form.apikey") + `</span><input name="api_key" placeholder="` + apiPH + `"></div>
     <div class="field"><span class="field-label">` + t(lang, "form.pat") + `</span><input name="pat" placeholder="` + patPH + `"></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.userid") + `</span><input name="user_id" value="` + esc(userIDVal) + `" placeholder="` + esc(userIDPH) + `"></div>
     <div class="field"><span class="field-label">` + t(lang, "form.jwt") + `</span><input name="jwt" placeholder="` + jwtPH + `"></div>
     <div class="field"><span class="field-label">` + t(lang, "form.enabled") + `</span><label class="toggle"><input type="checkbox" name="enabled" ` + checkedAttr + `><span class="slider"></span>` + t(lang, "form.enabled") + `</label></div>
   </div>
@@ -205,7 +319,7 @@ func stationForm(lang string, edit *domain.Station) string {
 <script>
 function tmSubmit(m,u){
   var f=document.getElementById('stform'), v=function(n){var el=f[n]; if(!el) return ''; if(el.type=='checkbox') return el.checked; return el.value;};
-  var st={id:v('id'),name:v('name'),base_url:v('base_url'),kind:v('kind'),auth:{api_key:v('api_key'),pat:v('pat'),jwt:v('jwt'),group:v('group')},poll_interval:v('poll_interval'),enabled:!!v('enabled')};
+  var st={id:v('id'),name:v('name'),base_url:v('base_url'),kind:v('kind'),auth:{api_key:v('api_key'),pat:v('pat'),user_id:v('user_id'),jwt:v('jwt'),group:v('group')},poll_interval:v('poll_interval'),enabled:!!v('enabled')};
   fetch(u,{method:m,headers:{'Content-Type':'application/json'},body:JSON.stringify(st)}).then(function(r){if(r.ok){location.href='/stations';}else{r.text().then(function(t){alert(t);});}}).catch(function(e){alert(e);});
   return false;
 }
@@ -220,7 +334,11 @@ type stationInput struct {
 	BaseURL string `json:"base_url"`
 	Kind    string `json:"kind"`
 	Auth    struct {
-		APIKey, PAT, JWT, Group string
+		APIKey string `json:"api_key"`
+		PAT    string `json:"pat"`
+		UserID string `json:"user_id"`
+		JWT    string `json:"jwt"`
+		Group  string `json:"group"`
 	} `json:"auth"`
 	PollInterval string `json:"poll_interval"`
 	Enabled      bool   `json:"enabled"`
@@ -233,7 +351,7 @@ func (in stationInput) toStation() (domain.Station, error) {
 	}
 	return domain.Station{
 		ID: in.ID, Name: in.Name, BaseURL: in.BaseURL, Kind: domain.StationKind(in.Kind),
-		Auth:         domain.AuthConfig{APIKey: in.Auth.APIKey, PAT: in.Auth.PAT, JWT: in.Auth.JWT, Group: in.Auth.Group},
+		Auth:         domain.AuthConfig{APIKey: in.Auth.APIKey, PAT: in.Auth.PAT, UserID: in.Auth.UserID, JWT: in.Auth.JWT, Group: in.Auth.Group},
 		PollInterval: domain.Duration(d), Enabled: in.Enabled,
 	}, nil
 }
@@ -296,6 +414,9 @@ func (s *Server) stationsUpsert(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.Auth.PAT == "" {
 			in.Auth.PAT = existing.Auth.PAT
+		}
+		if in.Auth.UserID == "" {
+			in.Auth.UserID = existing.Auth.UserID
 		}
 		if in.Auth.JWT == "" {
 			in.Auth.JWT = existing.Auth.JWT
@@ -363,4 +484,23 @@ func sparklineSVG(vals []float64, w, h int) string {
 		pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, y))
 	}
 	return fmt.Sprintf("<svg width=\"%d\" height=\"%d\" xmlns=\"http://www.w3.org/2000/svg\"><polyline points=\"%s\" fill=\"none\" stroke=\"var(--primary)\" stroke-width=\"1.5\"/></svg>", w, h, strings.Join(pts, " "))
+}
+
+// POST /api/stations/{id}/poll — trigger an immediate poll for a station.
+func (s *Server) stationsPoll(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		http.Error(w, "station manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	poller, ok := s.mgr.(interface{ PollNow(string) error })
+	if !ok {
+		http.Error(w, "poll not supported", http.StatusNotImplemented)
+		return
+	}
+	if err := poller.PollNow(id); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"id": id, "status": "polled"})
 }

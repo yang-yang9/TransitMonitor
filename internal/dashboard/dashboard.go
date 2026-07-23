@@ -54,6 +54,7 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Post("/api/stations", s.stationsCreate)
 	r.Put("/api/stations/{id}", s.stationsUpsert)
 	r.Delete("/api/stations/{id}", s.stationsDelete)
+	r.Post("/api/stations/{id}/poll", s.stationsPoll)
 	s.mux = r
 	return s
 }
@@ -259,18 +260,33 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			name = st.ID
 		}
+		grs, _ := s.store.LatestGroupRatios(ctx, st.ID)
+		chart := groupRatioChart(grs, false)
+		// recent group-ratio change hint
+		changeHint := ""
+		if evs, _ := s.store.ListChangeEvents(ctx, st.ID, 20); len(evs) > 0 {
+			for _, e := range evs {
+				if e.Field == domain.FieldGroupRatio {
+					changeHint = fmt.Sprintf(`<div class="meta"><span class="badge b-warn">%s</span> %s → <b>%s</b> (%s)</div>`,
+						t(lang, "recent.change"), esc(e.Group), esc(e.New), fmtPct(e.DeltaPct))
+					break
+				}
+			}
+		}
+		grpCount := len(grs)
 		b.WriteString(fmt.Sprintf(
-			`<div class="card stcard">`+
+			`<a class="card stcard" href="/stations/%s">`+
 				`<div class="st-hdr"><span class="st-name">%s</span><span class="dot-s %s"></span></div>`+
-				`<div class="kpi-label">%s</div>`+
-				`<div class="kpi">%d</div>`+
+				`%s`+
+				`%s`+
 				`<div class="meta">`+
-				`<span class="tag tag-pri">%s</span> <span class="tag">%s</span><br>`+
-				`%s: %s</div></div>`,
-			esc(name), dot,
-			t(lang, "meta.models"), n,
+				`<span class="tag tag-pri">%s</span> <span class="tag">%s</span> · `+
+				`%d %s · %s: %s</div></a>`,
+			esc(st.ID), esc(name), dot,
+			chart,
+			changeHint,
 			esc(string(st.Kind)), esc(st.ID),
-			t(lang, "meta.lastscrape"), lastStr))
+			grpCount, t(lang, "meta.groups"), t(lang, "meta.lastscrape"), lastStr))
 	}
 	b.WriteString(`</div>`)
 	b.WriteString(`<div class="card" style="margin-top:.5rem"><h2>` + t(lang, "section.explore") + `</h2><div class="kvs">`)
@@ -283,6 +299,7 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }

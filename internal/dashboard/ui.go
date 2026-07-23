@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -72,13 +73,66 @@ h2{font-size:1.1rem;font-weight:600;color:var(--ink2);margin:0 0 .6rem}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:1rem}
 
 /* ── station KPI cards ── */
-.stcard{display:flex;flex-direction:column;gap:.4rem;cursor:default}
+.stcard{display:flex;flex-direction:column;gap:.4rem;cursor:pointer;text-decoration:none;color:inherit}
 .stcard:hover{transform:translateY(-2px);border-color:var(--primary-100)}
 .stcard .st-hdr{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
 .stcard .st-name{font-weight:600;font-size:.95rem;color:var(--ink2)}
 .stcard .kpi-label{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:.4rem}
 .stcard .kpi{font-size:2rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1;margin:.2rem 0;color:var(--ink)}
 .stcard .meta{color:var(--muted);font-size:.82rem;line-height:1.6;word-break:break-all}
+.gr-preview{display:flex;flex-wrap:wrap;gap:.25rem;margin:.1rem 0 .2rem}
+.badge-sm{display:inline-flex;align-items:center;gap:.15rem;font-size:.7rem;padding:.1rem .35rem;border-radius:4px;background:var(--bg-2);border:1px solid var(--border);color:var(--ink2);font-variant-numeric:tabular-nums}
+.badge-sm.b-cheap{color:#0a7c43;border-color:#9fe3c0;background:rgba(10,124,67,.06)}
+.badge-sm.b-warn{color:#b6500a;border-color:#f3d3a6;background:rgba(182,80,10,.06)}
+.badge-sm.b-ok{color:var(--ink2)}
+
+/* group-ratio bar chart */
+.gr-chart{display:flex;flex-direction:column;gap:.4rem;margin-bottom:.5rem}
+.gr-chart.lg{gap:.5rem}
+.gr-chart.lg .gr-row{grid-template-columns:11rem 1fr 4rem}
+.gr-chart.lg .gr-name{font-size:.92rem}
+.gr-chart.lg .gr-track{height:20px;border-radius:10px}
+.gr-chart.lg .gr-bar{border-radius:9px}
+.gr-chart.lg .gr-val{font-size:.92rem}
+.gr-row{display:grid;grid-template-columns:9rem 1fr 3.5rem;align-items:center;gap:.6rem}
+.gr-name{font-size:.82rem;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gr-track{height:14px;background:var(--bg-2);border-radius:7px;overflow:hidden;border:1px solid var(--border)}
+.gr-bar{display:block;height:100%;border-radius:6px;transition:width .3s}
+.gr-bar.b-cheap{background:linear-gradient(90deg,#16a34a,#4ade80)}
+.gr-bar.b-ok{background:linear-gradient(90deg,#6366f1,#818cf8)}
+.gr-bar.b-warn{background:linear-gradient(90deg,#ea580c,#fb923c)}
+.gr-val{font-size:.82rem;font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+
+/* group-ratio trend sparkline grid */
+.spark-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.6rem}
+.spark-cell{display:flex;flex-direction:column;gap:.25rem;padding:.6rem .7rem;background:var(--card);border:1px solid var(--border);border-radius:var(--radius)}
+.spark-cell .sc-hdr{display:flex;justify-content:space-between;align-items:baseline;gap:.4rem}
+.spark-cell .sc-name{font-weight:600;font-size:.85rem;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spark-cell .sc-val{font-size:1rem;font-weight:700;font-variant-numeric:tabular-nums}
+.spark-cell svg{display:block;width:100%;height:32px}
+.spark-cell .sc-delta{font-size:.72rem;font-weight:600}
+
+/* collapsible details sections */
+details.sec{margin:.6rem 0;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
+details.sec>summary{cursor:pointer;padding:.6rem .8rem;font-weight:600;font-size:.9rem;color:var(--ink2);list-style:none;display:flex;align-items:center;gap:.4rem}
+details.sec>summary::before{content:"▸";color:var(--muted);transition:transform .15s}
+details.sec[open]>summary::before{content:"▾"}
+details.sec[open]>summary{border-bottom:1px solid var(--border)}
+
+/* group × station matrix cell */
+.gcell{display:inline-block;min-width:3rem;padding:.18rem .4rem;border-radius:5px;font-variant-numeric:tabular-nums;font-weight:600;font-size:.85rem}
+.gcell.p-cheap{background:rgba(22,163,74,.12);color:#0a7c43}
+.gcell.p-mid{background:var(--bg-2);color:var(--ink2)}
+.gcell.p-high{background:rgba(234,88,12,.12);color:#b6500a}
+.gcell.p-na{color:var(--muted)}
+
+/* ratio table visual bars + group separators */
+.rat-bar{height:6px;background:var(--bg-2);border-radius:3px;overflow:hidden;margin-bottom:.2rem;min-width:80px}
+.rb-fill{display:block;height:100%;background:linear-gradient(90deg,var(--primary),var(--primary-300));border-radius:3px}
+tr.grp-sep td{padding:.45rem .6rem!important;background:var(--bg-1);border-bottom:2px solid var(--primary-100)}
+.grp-tag{font-weight:600;font-size:.85rem;color:var(--primary)}
+.muted-cell{background:var(--bg-1)}
+.b-strong{font-weight:700}
 .dot-s{width:9px;height:9px;border-radius:50%;display:inline-block;flex-shrink:0}
 .dot-s.ok{background:var(--ok);box-shadow:0 0 6px rgba(16,185,129,.4)}.dot-s.bad{background:var(--crit);box-shadow:0 0 6px rgba(239,68,68,.4)}.dot-s.none{background:#cbd5e1}
 
@@ -113,6 +167,8 @@ tbody tr:hover{background:var(--row)}
 .btn-danger{background:linear-gradient(135deg,var(--crit),#dc2626);box-shadow:0 2px 8px rgba(239,68,68,.2)}
 .btn-danger:hover{box-shadow:0 4px 12px rgba(239,68,68,.25)}
 .btn-sm{padding:.3rem .65rem;font-size:.8rem;border-radius:var(--radius-xs)}
+.field-sel{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;margin:.5rem 0 1rem;padding:.6rem .8rem;background:var(--card);border:1px solid var(--border);border-radius:var(--radius)}
+.field-sel .cur-field{font-weight:700;color:var(--primary)}
 .btn-group{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
 
 /* ── forms ── */
@@ -235,6 +291,9 @@ func pageShell(lang, title, active, body string) string {
 
 func writeHTMLShell(w http.ResponseWriter, lang, title, active, body string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	_, _ = w.Write([]byte(pageShell(lang, title, active, body)))
 }
 
@@ -263,6 +322,39 @@ func renderTable(lang string, cols []string, rows [][]string) string {
 	return b.String()
 }
 
+// renderRatioTable renders the model-ratio table, grouping rows by the first cell
+// (group name) with a full-width separator row carrying the group + its ratio.
+func renderRatioTable(cols []string, rows [][]string) string {
+	var b strings.Builder
+	b.WriteString(`<div class="tbl-wrap"><table><thead><tr>`)
+	for _, c := range cols {
+		b.WriteString("<th>")
+		b.WriteString(html.EscapeString(c))
+		b.WriteString("</th>")
+	}
+	b.WriteString("</tr></thead><tbody>")
+	prev := ""
+	for _, row := range rows {
+		grp := row[0]
+		if grp != prev {
+			b.WriteString(`<tr class="grp-sep"><td colspan="` + fmt.Sprint(len(cols)) + `">` +
+				`<span class="grp-tag">` + grp + `</span></td></tr>`)
+			prev = grp
+		}
+		b.WriteString(`<tr>`)
+		// first cell is the group name — suppress repeating it (shown in separator)
+		b.WriteString(`<td class="muted-cell"></td>`)
+		for _, cell := range row[1:] {
+			b.WriteString("<td>")
+			b.WriteString(cell)
+			b.WriteString("</td>")
+		}
+		b.WriteString("</tr>")
+	}
+	b.WriteString("</tbody></table></div>")
+	return b.String()
+}
+
 func severityBadge(lang, sev string) string {
 	cls, key := "b-muted", "badge.info"
 	switch strings.ToLower(sev) {
@@ -272,6 +364,54 @@ func severityBadge(lang, sev string) string {
 		cls, key = "b-warn", "badge.warning"
 	}
 	return `<span class="badge ` + cls + `" title="` + esc(sev) + `">` + t(lang, key) + `</span>`
+}
+
+// groupRatioChart renders the horizontal bar chart of group ratios, sorted
+// cheapest-first. lg=true renders the larger hero variant (used on the station
+// detail page); false the compact variant (overview cards). Returns "" when
+// the map is empty.
+func groupRatioChart(grs map[string]float64, lg bool) string {
+	if len(grs) == 0 {
+		return ""
+	}
+	type gr struct {
+		name string
+		v    float64
+	}
+	grp := make([]gr, 0, len(grs))
+	maxV := 0.0
+	for k, v := range grs {
+		grp = append(grp, gr{k, v})
+		if v > maxV {
+			maxV = v
+		}
+	}
+	sort.Slice(grp, func(i, j int) bool { return grp[i].v < grp[j].v })
+	cls := ""
+	if lg {
+		cls = " lg"
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="gr-chart` + cls + `">`)
+	for _, g := range grp {
+		pct := 0.0
+		if maxV > 0 {
+			pct = g.v / maxV * 100
+		}
+		bc := "b-ok"
+		if g.v < 0.5 {
+			bc = "b-cheap"
+		} else if g.v > 1.0 {
+			bc = "b-warn"
+		}
+		b.WriteString(fmt.Sprintf(
+			`<div class="gr-row"><span class="gr-name" title="%s">%s</span>`+
+				`<div class="gr-track"><span class="gr-bar %s" style="width:%.1f%%"></span></div>`+
+				`<span class="gr-val">%.2fx</span></div>`,
+			esc(g.name), esc(g.name), bc, pct, g.v))
+	}
+	b.WriteString(`</div>`)
+	return b.String()
 }
 
 func statusBadge(lang, sentinel string) string {

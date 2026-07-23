@@ -37,6 +37,7 @@ const (
 	FieldNative       = "native_ratio"
 	FieldPresence     = "presence"
 	FieldSentinelFlip = "sentinel_flip"
+	FieldGroupRatio   = "group_ratio"
 
 	SentAdded   = "added"
 	SentRemoved = "removed"
@@ -47,7 +48,9 @@ const (
 )
 
 // Diff compares prev and curr (keyed by group+model) and returns ChangeEvents.
-func Diff(prev, curr []domain.RatioObservation, cfg Config) []domain.ChangeEvent {
+// prevGroup/currGroup are the station-level group-ratio maps (group_name →
+// ratio); pass nil for both to opt out of group-ratio change detection.
+func Diff(prev, curr []domain.RatioObservation, prevGroup, currGroup map[string]float64, cfg Config) []domain.ChangeEvent {
 	pm := indexObs(prev)
 	cm := indexObs(curr)
 
@@ -79,6 +82,45 @@ func Diff(prev, curr []domain.RatioObservation, cfg Config) []domain.ChangeEvent
 			}
 			events = append(events, valueEvents(p, c, cfg)...)
 		}
+	}
+	events = append(events, groupRatioEvents(prevGroup, currGroup, cfg)...)
+	return events
+}
+
+// groupRatioEvents diffs prev→curr group-ratio maps and emits one ChangeEvent
+// per changed or newly-appeared group. Removed groups are ignored (a group
+// dropping out usually means the endpoint stopped reporting it, not a price
+// change). StationID/ObservedAt are stamped by the caller (the scheduler),
+// since changedet is pure and time-less. pct()/severity() are reused.
+func groupRatioEvents(prev, curr map[string]float64, cfg Config) []domain.ChangeEvent {
+	if len(curr) == 0 {
+		return nil
+	}
+	if prev == nil {
+		prev = map[string]float64{}
+	}
+	var events []domain.ChangeEvent
+	for g, cv := range curr {
+		pv, ok := prev[g]
+		if !ok {
+			events = append(events, domain.ChangeEvent{
+				Field: FieldGroupRatio, Group: g,
+				New: fmt.Sprint(cv), DeltaAbs: cv, DeltaPct: 0,
+				Severity: SevInfo,
+			})
+			continue
+		}
+		if approxEq(pv, cv, cfg.RelEpsilon) {
+			continue
+		}
+		delta := cv - pv
+		p := pct(pv, delta)
+		events = append(events, domain.ChangeEvent{
+			Field: FieldGroupRatio, Group: g,
+			Old: fmt.Sprint(pv), New: fmt.Sprint(cv),
+			DeltaAbs: delta, DeltaPct: p,
+			Severity: severity(p, cfg),
+		})
 	}
 	return events
 }

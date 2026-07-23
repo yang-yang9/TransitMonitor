@@ -205,6 +205,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 		return fmt.Errorf("fetch ratios: %w", err)
 	}
 	t := s.Now()
+	// Fetch previous group ratios BEFORE inserting the new snapshot, so the
+	// group-ratio diff compares against the prior state (not the just-written one).
+	prevGroupRatios, _ := s.Store.PrevGroupRatios(ctx, stationID, t)
 	for i := range obs {
 		obs[i].StationID = stationID
 		obs[i].ObservedAt = t
@@ -216,7 +219,14 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 	if err := s.Store.InsertRatioObservations(ctx, obs); err != nil {
 		return err
 	}
-	events := changedet.Diff(prev, obs, s.DiffCfg)
+	events := changedet.Diff(prev, obs, prevGroupRatios, snap.GroupRatios, s.DiffCfg)
+	// changedet is pure/time-less; stamp station + time on group-ratio events.
+	for i := range events {
+		if events[i].Field == changedet.FieldGroupRatio {
+			events[i].StationID = stationID
+			events[i].ObservedAt = t
+		}
+	}
 	if len(events) > 0 {
 		if err := s.Store.InsertChangeEvents(ctx, events); err != nil {
 			return err
@@ -274,8 +284,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 	s.runCtx = ctx
 	for _, st := range s.stationList {
 		if !st.Enabled {
+			s.logger().Info("skip disabled station", "station", st.ID)
 			continue
 		}
+		s.logger().Info("starting poller", "station", st.ID, "interval", time.Duration(st.PollInterval))
 		s.startStationLocked(ctx, st)
 	}
 	s.mu.Unlock()
@@ -348,4 +360,9 @@ func errStr(err error) string {
 		return err.Error()
 	}
 	return ""
+}
+
+// PollNow triggers an immediate poll for a station (used by the dashboard "refresh" button).
+func (s *Scheduler) PollNow(stationID string) error {
+	return s.PollOnce(context.Background(), stationID)
 }

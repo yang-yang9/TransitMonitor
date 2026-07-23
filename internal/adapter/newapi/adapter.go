@@ -29,6 +29,7 @@ type Adapter struct {
 	StationID string
 	BaseURL   string
 	PAT       string // system access token (UserAuth/Admin/Root) for /api/user/self/groups
+	UserID    string // New-Api-User header value (required by some new-api forks alongside PAT)
 	APIKey    string // sk- key for /v1/* + probe (unused by FetchRatios)
 	Group     string // group to observe
 	Client    *http.Client
@@ -36,7 +37,7 @@ type Adapter struct {
 }
 
 // New constructs a new-api adapter. group defaults to "default".
-func New(stationID, baseURL, pat, apiKey, group string, client *http.Client) *Adapter {
+func New(stationID, baseURL, pat, userID, apiKey, group string, client *http.Client) *Adapter {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -44,7 +45,7 @@ func New(stationID, baseURL, pat, apiKey, group string, client *http.Client) *Ad
 		group = "default"
 	}
 	return &Adapter{
-		StationID: stationID, BaseURL: baseURL, PAT: pat, APIKey: apiKey,
+		StationID: stationID, BaseURL: baseURL, PAT: pat, UserID: userID, APIKey: apiKey,
 		Group: group, Client: client, now: time.Now,
 	}
 }
@@ -135,6 +136,11 @@ func (a *Adapter) doGet(ctx context.Context, path, bearer string) (int, []byte, 
 	}
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
+		// Some new-api forks require New-Api-User alongside the PAT for
+		// dashboard endpoints (/api/pricing, /api/user/self, /api/option).
+		if bearer == a.PAT && a.UserID != "" {
+			req.Header.Set("New-Api-User", a.UserID)
+		}
 	}
 	resp, err := a.Client.Do(req)
 	if err != nil {
@@ -183,8 +189,12 @@ func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityRepor
 		caps.Endpoints = append(caps.Endpoints, endpoint("/api/ratio_config", status, nil, now))
 	}
 
-	// /api/pricing (public by default).
+	// /api/pricing (public by default; some stations set requireAuth=true → retry with PAT).
 	if status, _, err := a.doGet(ctx, "/api/pricing", ""); err == nil {
+		if status == 401 && a.PAT != "" {
+			// pricing requires auth — retry with PAT
+			status, _, err = a.doGet(ctx, "/api/pricing", a.PAT)
+		}
 		caps.HasPricing = status == 200
 		caps.Endpoints = append(caps.Endpoints, endpoint("/api/pricing", status, nil, now))
 	}
@@ -228,6 +238,27 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 
 	var src string
 	switch {
+	case caps.HasPricing:
+		// /api/pricing returns only models with enabled channels (what the station actually serves).
+		src = "/api/pricing"
+		authBearer := ""
+		if a.PAT != "" {
+			authBearer = a.PAT
+		}
+		status, body, err := a.doGet(ctx, src, authBearer)
+		if err != nil {
+			return snap, nil, err
+		}
+		if status != 200 {
+			return snap, nil, fmt.Errorf("pricing: status %d", status)
+		}
+		snap.RawPayloads[src] = body
+		var pr pricingResp
+		if err := json.Unmarshal(body, &pr); err != nil {
+			return snap, nil, err
+		}
+		data.TopGroupRatio = pr.GroupRatio
+		data.Models = a.modelsFromPricing(pr.Data, caps.SelfUseMode, pr.GroupRatio)
 	case caps.HasRatioConfig:
 		src = "/api/ratio_config"
 		status, body, err := a.doGet(ctx, src, "")
@@ -278,27 +309,65 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 		}
 		data.TopGroupRatio = rc.GroupRatio
 		data.Models = a.modelsFromMaps(rc)
-	case caps.HasPricing:
-		src = "/api/pricing"
-		status, body, err := a.doGet(ctx, src, "")
-		if err != nil {
-			return snap, nil, err
-		}
-		if status != 200 {
-			return snap, nil, fmt.Errorf("pricing: status %d", status)
-		}
-		snap.RawPayloads[src] = body
-		var pr pricingResp
-		if err := json.Unmarshal(body, &pr); err != nil {
-			return snap, nil, err
-		}
-		data.TopGroupRatio = pr.GroupRatio
-		data.Models = a.modelsFromPricing(pr.Data, caps.SelfUseMode, pr.GroupRatio)
 	default:
 		// No ratio source at all (e.g. pricing auth-gated + ratio_config off).
 		return snap, nil, fmt.Errorf("no ratio source available for station %s", a.StationID)
 	}
 	snap.EndpointsUsed = []string{src}
+
+	// /api/ratio_config and /api/option return every CONFIGURED model — new-api's
+	// full built-in default ratio map (defaultModelRatio, ~2500 entries on a stock
+	// install) plus admin overrides — NOT the models the station actually serves.
+	// Filter by /v1/models (sk- key) to keep only enabled-channel models. /api/pricing
+	// already returns only enabled-channel models, so it needs no filtering.
+	enabledFilterApplied := false
+	if src != "/api/pricing" && a.APIKey != "" {
+		if status, body, err := a.doGet(ctx, "/v1/models", a.APIKey); err == nil && status == 200 {
+			type modelsResp struct {
+				Data []struct {
+					ID string `json:"id"`
+				} `json:"data"`
+			}
+			var mr modelsResp
+			if json.Unmarshal(body, &mr) == nil {
+				enabled := make(map[string]bool, len(mr.Data))
+				for _, m := range mr.Data {
+					enabled[m.ID] = true
+				}
+				filtered := data.Models[:0]
+				for _, m := range data.Models {
+					if enabled[m.Name] {
+						filtered = append(filtered, m)
+					}
+				}
+				data.Models = filtered
+				enabledFilterApplied = true
+				snap.EndpointsUsed = append(snap.EndpointsUsed, "/v1/models")
+			}
+		}
+	}
+
+	// Refuse to record when the only ratio source is ratio_config/option AND no
+	// enabled-filter applied. Otherwise we would persist new-api's entire built-in
+	// default model list (the "2000+ models" that are really just new-api's stock
+	// catalog, most of which the station never enabled) as if it were the station's
+	// real catalog — flooding the store and firing spurious model_added/removed
+	// alerts. The enabled set is only knowable via /api/pricing (needs the pricing
+	// module public, or a PAT that satisfies its UserAuth gate) or /v1/models
+	// (sk- key). Point the operator at the fix instead of silently ingesting junk.
+	if src != "/api/pricing" && !enabledFilterApplied {
+		reason := "no api_key is configured"
+		if a.APIKey != "" {
+			reason = "/v1/models is unavailable for the configured api_key (key invalid or endpoint gated)"
+		}
+		return snap, nil, fmt.Errorf(
+			"ratio source %s exposes %d configured models (including new-api's built-in default ratio map), "+
+				"which is not the set of models this station actually serves; cannot determine the enabled set (%s). "+
+				"Provide a PAT (system access token — unlocks /api/pricing, which returns only enabled-channel models) "+
+				"or a valid api_key (sk- key — enables /v1/models filtering), or set pricing.requireAuth=false on "+
+				"station %s. No observations recorded until then.",
+			src, len(data.Models), reason, a.StationID)
+	}
 
 	// Per-user group ratios override the top-level group_ratio.
 	if a.PAT != "" {
@@ -313,6 +382,19 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 				snap.EndpointsUsed = append(snap.EndpointsUsed, "/api/user/self/groups")
 			}
 		}
+	}
+
+	// Persist group_ratios in the snapshot for dashboard display.
+	// User group ratios override top-level ones (same priority as normalize).
+	if len(data.TopGroupRatio) > 0 || len(data.UserGroupRatio) > 0 {
+		gr := make(map[string]float64)
+		for k, v := range data.TopGroupRatio {
+			gr[k] = v
+		}
+		for k, v := range data.UserGroupRatio {
+			gr[k] = v
+		}
+		snap.GroupRatios = gr
 	}
 
 	obs := normalize.NewAPINormalize(data)

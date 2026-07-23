@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,8 @@ type mockCfg struct {
 	userGroups    map[string]float64 // nil + pat check → 401
 	pat           string             // expected bearer for /api/user/self/groups
 	group         string             // adapter observed group (default "default")
+	enabledModels []string           // nil → /v1/models 404; else the set /v1/models returns
+	noAPIKey      bool               // true → adapter built with no sk- key (skip /v1/models filter)
 }
 
 func startMock(t *testing.T, cfg mockCfg) (*httptest.Server, *Adapter) {
@@ -78,9 +81,24 @@ func startMock(t *testing.T, cfg mockCfg) (*httptest.Server, *Adapter) {
 		}
 		writeJSON(w, 200, map[string]any{"success": true, "data": data})
 	})
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+		if cfg.enabledModels == nil {
+			writeJSON(w, 404, map[string]any{"success": false, "message": "no api key"})
+			return
+		}
+		ids := make([]map[string]any, 0, len(cfg.enabledModels))
+		for _, m := range cfg.enabledModels {
+			ids = append(ids, map[string]any{"id": m})
+		}
+		writeJSON(w, 200, map[string]any{"object": "list", "data": ids})
+	})
 
 	srv := httptest.NewServer(mux)
-	a := New("s1", srv.URL, cfg.pat, "sk-test", cfg.group, srv.Client())
+	ak := "sk-test"
+	if cfg.noAPIKey {
+		ak = ""
+	}
+	a := New("s1", srv.URL, cfg.pat, "", ak, cfg.group, srv.Client())
 	clock := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	a.SetClock(func() time.Time { return clock })
 	t.Cleanup(srv.Close)
@@ -240,12 +258,14 @@ func TestFetchRatios_UserGroupsOverride(t *testing.T) {
 
 func TestFetchRatios_RatioConfigRich(t *testing.T) {
 	_, a := startMock(t, mockCfg{
+		pricingStatus: 401,
 		ratioConfigOK: true,
 		ratioConfig: ratioConfigData{
 			ModelRatio:      map[string]float64{"gpt-4o": 1.25},
 			CompletionRatio: map[string]float64{"gpt-4o": 4},
 			GroupRatio:      map[string]float64{"default": 1.0},
 		},
+		enabledModels: []string{"gpt-4o"}, // /v1/models filter keeps only enabled models
 	})
 	caps, _ := a.ProbeCapabilities(context.Background())
 	if !caps.HasRatioConfig {
@@ -265,6 +285,47 @@ func TestFetchRatios_RatioConfigRich(t *testing.T) {
 	if !approxEq(gpt.InputUSDPer1M, 2.5) {
 		t.Errorf("gpt-4o input: want 2.5 got %v", gpt.InputUSDPer1M)
 	}
+}
+
+// TestFetchRatios_RatioConfigUnfiltered mirrors the real-world "2000+ models"
+// bug: a station gates /api/pricing (401) and exposes /api/ratio_config, which
+// returns new-api's full built-in default model list. With no sk- key, the
+// /v1/models filter cannot run, so the adapter must REFUSE to record (rather
+// than persist thousands of built-in defaults the station never enabled) and
+// tell the operator how to fix it.
+func TestFetchRatios_RatioConfigUnfiltered(t *testing.T) {
+	_, a := startMock(t, mockCfg{
+		pricingStatus: 401, // pricing auth-gated; no PAT → HasPricing false
+		ratioConfigOK: true,
+		ratioConfig: ratioConfigData{
+			// a few "built-in default" names — the real list is ~2500
+			ModelRatio: map[string]float64{"gpt-4o": 1.25, "@cf/meta/llama-3-8b": 0.5, "360gpt-pro": 2.0},
+			GroupRatio: map[string]float64{"default": 1.0},
+		},
+		noAPIKey: true, // no sk- key → /v1/models filter cannot run
+	})
+	caps, _ := a.ProbeCapabilities(context.Background())
+	if caps.HasPricing {
+		t.Error("pricing is gated (401) and no PAT → HasPricing should be false")
+	}
+	if !caps.HasRatioConfig {
+		t.Error("HasRatioConfig should be true (ExposeRatioEnabled on)")
+	}
+	snap, obs, err := a.FetchRatios(context.Background(), caps)
+	if err == nil {
+		t.Fatal("expected a refusal error when ratio_config has no enabled-filter, got nil")
+	}
+	if len(obs) != 0 {
+		t.Errorf("refused path must record 0 observations, got %d", len(obs))
+	}
+	// Guidance must point the operator at the fix.
+	msg := err.Error()
+	for _, want := range []string{"built-in", "PAT", "api_key", "pricing.requireAuth"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error should mention %q (got: %s)", want, msg)
+		}
+	}
+	_ = snap // RawSnapshot is discarded by the scheduler on FetchRatios error
 }
 
 func TestFetchRatios_NoSource(t *testing.T) {

@@ -30,6 +30,9 @@
 - go.mod: go 1.25 (x/time requires it)
 - Git identity: Devix <devix@transitmonitor.dev>, no Co-Authored-By trailer
 
+### Fixed
+- new-api adapter no longer ingests new-api's full built-in default model list (~2500 entries) when the ratio source is `/api/ratio_config` or `/api/option` and no enabled-filter is available. `/api/pricing` (enabled-channel models only) is now the preferred source; `ratio_config`/`option` results are filtered by `/v1/models` when an `api_key` is set. When neither is available, the adapter refuses with actionable guidance instead of flooding the store with built-in defaults the station never enabled.
+
 ## [0.1.0] - 2026-07-21
 ### Added
 - Initial release: 中转站倍率监控 (new-api/sub2api), Go single binary, SQLite, SDD+TDD.

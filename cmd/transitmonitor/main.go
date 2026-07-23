@@ -94,6 +94,7 @@ func main() {
 		if dbSt, err := st.ListStationsDB(context.Background(), encKey); err == nil {
 			for _, dbs := range dbSt {
 				if !containsID(stations, dbs.ID) {
+					dbs.Enabled = true // DB-loaded stations default to enabled
 					stations = append(stations, dbs)
 				}
 			}

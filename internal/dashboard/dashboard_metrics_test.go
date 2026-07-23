@@ -51,14 +51,37 @@ func TestMatrixHTML(t *testing.T) {
 		{StationID: "s1", GroupName: "default", ModelName: "gpt-4o", InputUSDPer1M: 2.5, OutputUSDPer1M: 10, ObservedAt: now},
 	})
 
+	// model mode renders the model × station matrix
+	r := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(r, localReq(http.MethodGet, "/matrix?mode=model&field=input"))
+	if r.Code != 200 {
+		t.Fatalf("want 200 got %d", r.Code)
+	}
+	body := r.Body.String()
+	if !strings.Contains(body, "<table") || !strings.Contains(body, "gpt-4o") || !strings.Contains(body, "2.5000") {
+		t.Errorf("matrix (model) HTML unexpected:\n%s", body)
+	}
+}
+
+func TestMatrixGroupHTML(t *testing.T) {
+	srv, st, cleanup := newDash(t, "")
+	defer cleanup()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	// store a snapshot carrying group_ratios (group mode reads from LatestGroupRatios)
+	_ = st.InsertSnapshot(ctx, domain.RawSnapshot{
+		StationID: "s1", ObservedAt: now, GroupRatios: map[string]float64{"vip": 0.05, "gptpro": 0.12},
+	})
+
+	// group mode is the default; renders the group × station matrix
 	r := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(r, localReq(http.MethodGet, "/matrix"))
 	if r.Code != 200 {
 		t.Fatalf("want 200 got %d", r.Code)
 	}
 	body := r.Body.String()
-	if !strings.Contains(body, "<table") || !strings.Contains(body, "gpt-4o") || !strings.Contains(body, "2.5000") {
-		t.Errorf("matrix HTML unexpected:\n%s", body)
+	if !strings.Contains(body, "vip") || !strings.Contains(body, "0.05x") || !strings.Contains(body, "0.12x") {
+		t.Errorf("matrix (group) HTML unexpected:\n%s", body)
 	}
 }
 

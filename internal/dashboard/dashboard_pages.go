@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 
 // metricsHandler exposes Prometheus-format metrics. Bypasses auth (for scrapers).
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	// For Prometheus scrapers (Accept: text/plain), serve raw. For browsers, wrap in HTML.
+	isBrowser := strings.Contains(r.Header.Get("Accept"), "text/html")
 	var b strings.Builder
 	b.WriteString("# HELP transitmonitor_input_usd_per_1m Effective input USD per 1M tokens (normalized)\n")
 	b.WriteString("# TYPE transitmonitor_input_usd_per_1m gauge\n")
@@ -50,6 +53,12 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(&b, "transitmonitor_probe_markup_pct{station=%q,model=%q} %v\n", st.ID, model, p.MarkupPct)
 		}
 	}
+	if isBrowser {
+		lang := s.lang(w, r)
+		body := `<h1>` + t(lang, "nav.metrics") + `</h1><p class="sub">Prometheus exposition format — scrape at <code>` + r.Host + `/metrics</code></p><div class="card"><pre style="font-size:.8rem;white-space:pre-wrap;overflow-x:auto">` + b.String() + `</pre></div>`
+		writeHTMLShell(w, lang, t(lang, "nav.metrics"), "metrics", body)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = w.Write([]byte(b.String()))
 }
@@ -78,27 +87,55 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 	if station == "" {
 		station = s.firstStation()
 	}
+	tab := r.URL.Query().Get("tab")
+	if tab == "" {
+		tab = "all"
+	}
 	evs, _ := s.store.ListChangeEvents(r.Context(), station, 100)
 	rows := make([][]string, 0, len(evs))
 	for _, e := range evs {
+		isGroup := e.Field == domain.FieldGroupRatio
+		switch tab {
+		case "group":
+			if !isGroup {
+				continue
+			}
+		case "model":
+			if isGroup {
+				continue
+			}
+		}
+		grpCell := esc(e.Group)
+		if isGroup {
+			grpCell = `<span class="grp-tag">` + esc(e.Group) + `</span>`
+		}
 		rows = append(rows, []string{
 			`<span class="mono">` + fmtTime(e.ObservedAt) + `</span>`,
-			esc(e.Group),
+			grpCell,
 			`<span class="mono">` + esc(e.Model) + `</span>`,
 			`<span class="tag">` + esc(e.Field) + `</span>`,
 			`<span class="mono">` + esc(e.Old) + `</span>`,
-			`<span class="mono">` + esc(e.New) + `</span>`,
+			`<span class="mono b-strong">` + esc(e.New) + `</span>`,
 			`<span class="num">` + fmtPct(e.DeltaPct) + `</span>`,
 			severityBadge(lang, e.Severity),
 		})
 	}
 	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
+	// tab filter
+	tabBtn := func(key, labelKey string) string {
+		cls := "btn btn-sm btn-outline"
+		if key == tab {
+			cls = "btn btn-sm"
+		}
+		return fmt.Sprintf(`<a class="%s" href="/changes?station=%s&tab=%s&_=%s">%s</a> `, cls, esc(station), key, matrixVer, t(lang, labelKey))
+	}
+	tabs := `<div class="field-sel">` + tabBtn("all", "btn.taball") + tabBtn("group", "btn.tabgroup") + tabBtn("model", "btn.tabmodel") + `</div>`
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
 		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p></div>` +
-		renderTable(lang, []string{
-			t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.field"),
-			t(lang, "col.old"), t(lang, "col.new"), t(lang, "col.deltapct"), t(lang, "col.severity"),
-		}, rows)
+		tabs + renderTable(lang, []string{
+		t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.field"),
+		t(lang, "col.old"), t(lang, "col.new"), t(lang, "col.deltapct"), t(lang, "col.severity"),
+	}, rows)
 	writeHTMLShell(w, lang, t(lang, "title.changes")+" · "+station, "changes", body)
 }
 
@@ -141,42 +178,152 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
+	mode := r.URL.Query().Get("mode")
+	if mode == "" {
+		mode = "group"
+	}
 	model := r.URL.Query().Get("model")
 	field := r.URL.Query().Get("field")
 	if field == "" {
-		field = "input"
+		field = "eff_in"
 	}
-	ctx := r.Context()
+	sts := s.stationsList() // cache once — avoids index-out-of-range if the list changes between calls
+
+	// mode toggle (group × station is the default; model × station is the drill-down)
+	toggle := `<div class="field-sel">` + t(lang, "col.field") + `: `
+	toggle += modeBtn("group", mode, lang, "btn.matrixgroup")
+	toggle += modeBtn("model", mode, lang, "btn.matrixmodel")
+	toggle += `</div>`
+
+	var tableHTML string
+	if mode == "model" {
+		tableHTML = s.matrixModelTable(lang, sts, field, model)
+	} else {
+		tableHTML = s.matrixGroupTable(lang, sts)
+	}
+	body := `<div class="page-hdr"><h1>` + t(lang, "title.matrix") + `</h1><p class="sub">` + t(lang, "sub.matrix") + `</p></div>` +
+		toggle + tableHTML
+	writeHTMLShell(w, lang, t(lang, "title.matrix"), "matrix", body)
+}
+
+// modeBtn renders a matrix mode toggle button (active when key==mode).
+func modeBtn(key, mode, lang, labelKey string) string {
+	cls := "btn btn-sm btn-outline"
+	if key == mode {
+		cls = "btn btn-sm"
+	}
+	return fmt.Sprintf(`<a class="%s" href="/matrix?mode=%s&_=%s">%s</a> `, cls, key, matrixVer, t(lang, labelKey))
+}
+
+// matrixGroupTable renders the group × station matrix: rows = union of groups,
+// columns = stations, cells = that group's ratio at that station.
+func (s *Server) matrixGroupTable(lang string, sts []domain.Station) string {
+	type stGR struct {
+		name string
+		gr   map[string]float64
+	}
+	rows := make([]stGR, len(sts))
+	groupSet := map[string]bool{}
+	for i, st := range sts {
+		gr, _ := s.store.LatestGroupRatios(context.Background(), st.ID)
+		rows[i] = stGR{name: st.Name, gr: gr}
+		for g := range gr {
+			groupSet[g] = true
+		}
+	}
+	groups := make([]string, 0, len(groupSet))
+	for g := range groupSet {
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+	// compute lo/hi across all present ratios for coloring
+	lo, hi := math.MaxFloat64, -math.MaxFloat64
+	for _, r := range rows {
+		for _, v := range r.gr {
+			if v < lo {
+				lo = v
+			}
+			if v > hi {
+				hi = v
+			}
+		}
+	}
+	cols := []string{t(lang, "col.group")}
+	for _, st := range sts {
+		cols = append(cols, esc(st.ID))
+	}
+	dataRows := make([][]string, 0, len(groups))
+	for _, g := range groups {
+		row := []string{`<span class="mono">` + esc(g) + `</span>`}
+		for _, r := range rows {
+			v, ok := r.gr[g]
+			if !ok {
+				row = append(row, `<span class="gcell p-na">—</span>`)
+			} else {
+				row = append(row, fmt.Sprintf(`<span class="gcell %s">%.2fx</span>`, groupColorClass(v, lo, hi), v))
+			}
+		}
+		dataRows = append(dataRows, row)
+	}
+	return renderTable(lang, cols, dataRows)
+}
+
+// groupColorClass colors a group-ratio cell: low = cheap (green), high = expensive (orange).
+func groupColorClass(v, lo, hi float64) string {
+	if hi <= lo {
+		return "p-mid"
+	}
+	pos := (v - lo) / (hi - lo) // 0..1
+	switch {
+	case pos <= 0.33:
+		return "p-cheap"
+	case pos >= 0.66:
+		return "p-high"
+	default:
+		return "p-mid"
+	}
+}
+
+// matrixModelTable renders the model × station matrix (the original drill-down
+// view), keeping the cheapest group observation per model and a field selector.
+func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, modelFilter string) string {
+	ctx := context.Background()
 	type cell struct {
 		input, output float64
 		sentinel      string
 		has           bool
 	}
-	stCells := make([]map[string]cell, len(s.stations))
+	stCells := make([]map[string]cell, len(sts))
 	modelSet := map[string]bool{}
-	for i, st := range s.stationsList() {
+	for i, st := range sts {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
 		m := map[string]cell{}
 		for _, o := range obs {
-			if model != "" && o.ModelName != model {
+			if modelFilter != "" && o.ModelName != modelFilter {
 				continue
 			}
-			if _, ok := m[o.ModelName]; !ok {
-				m[o.ModelName] = cell{fieldVal(field, o), 0, o.Sentinel, true}
+			v := fieldVal(field, o)
+			cur, ok := m[o.ModelName]
+			if !ok {
+				m[o.ModelName] = cell{v, 0, o.Sentinel, true}
 				modelSet[o.ModelName] = true
+				continue
+			}
+			if o.Sentinel == "" && (cur.sentinel != "" || v < cur.input) {
+				m[o.ModelName] = cell{v, 0, o.Sentinel, true}
 			}
 		}
 		stCells[i] = m
 	}
 	models := sortedModels(modelSet)
 	cols := []string{t(lang, "col.model")}
-	for _, st := range s.stationsList() {
+	for _, st := range sts {
 		cols = append(cols, esc(st.ID))
 	}
 	rows := make([][]string, 0, len(models))
 	for _, m := range models {
 		lo, hi := math.MaxFloat64, -math.MaxFloat64
-		for i := range s.stationsList() {
+		for i := range sts {
 			c := stCells[i][m]
 			if c.has && c.sentinel == "" {
 				if c.input < lo {
@@ -188,7 +335,7 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		row := []string{`<span class="mono">` + esc(m) + `</span>`}
-		for i := range s.stationsList() {
+		for i := range sts {
 			c := stCells[i][m]
 			switch {
 			case !c.has:
@@ -196,14 +343,71 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 			case c.sentinel != "":
 				row = append(row, statusBadge(lang, c.sentinel))
 			default:
-				row = append(row, fmt.Sprintf(`<span class="pcell %s">%s</span>`, priceColorClass(c.input, lo, hi), fmtUSD(c.input)))
+				row = append(row, fmt.Sprintf(`<span class="pcell %s">%s</span>`, priceColorClass(c.input, lo, hi), fmtCell(field, c.input)))
 			}
 		}
 		rows = append(rows, row)
 	}
-	body := `<div class="page-hdr"><h1>` + t(lang, "title.matrix") + `</h1><p class="sub">` + t(lang, "sub.matrix") + `</p></div>` +
-		renderTable(lang, cols, rows)
-	writeHTMLShell(w, lang, t(lang, "title.matrix"), "matrix", body)
+	// field selector (model mode only)
+	fields := []struct{ key, label string }{
+		{"eff_in", t(lang, "col.effratio")},
+		{"eff_out", t(lang, "col.effout")},
+		{"ratio", t(lang, "col.modelratio")},
+		{"input", t(lang, "col.inputusd")},
+		{"output", t(lang, "col.outputusd")},
+		{"cache_read", t(lang, "col.cacheread")},
+		{"cache_write", t(lang, "col.cachewrite")},
+	}
+	selector := `<div class="field-sel">` + t(lang, "col.field") + `: <span class="cur-field">` + fieldLabel(field, lang) + `</span> · `
+	for _, f := range fields {
+		cls := "btn btn-sm btn-outline"
+		if f.key == field {
+			cls = "btn btn-sm"
+		}
+		q := "?mode=model&field=" + f.key + "&_=" + matrixVer
+		if modelFilter != "" {
+			q += "&model=" + esc(modelFilter)
+		}
+		selector += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, cls, q, f.label)
+	}
+	selector += `</div>`
+	return selector + renderTable(lang, cols, rows)
+}
+
+// fmtCell formats a matrix cell value according to the active field:
+// ratio fields use a "x" suffix; price fields use USD.
+func fmtCell(field string, v float64) string {
+	switch field {
+	case "ratio", "eff_in", "eff_out":
+		return fmt.Sprintf("%.4fx", v)
+	default:
+		return fmtUSD(v)
+	}
+}
+
+// matrixVer is a cache-busting version for matrix field-selector links.
+// Bump it whenever the matrix rendering changes so cached proxies/browsers
+// re-fetch instead of serving a stale ?field=… response.
+const matrixVer = "3"
+
+func fieldLabel(field, lang string) string {
+	switch field {
+	case "eff_in":
+		return t(lang, "col.effratio")
+	case "eff_out":
+		return t(lang, "col.effout")
+	case "ratio":
+		return t(lang, "col.modelratio")
+	case "input":
+		return t(lang, "col.inputusd")
+	case "output":
+		return t(lang, "col.outputusd")
+	case "cache_read":
+		return t(lang, "col.cacheread")
+	case "cache_write":
+		return t(lang, "col.cachewrite")
+	}
+	return field
 }
 
 func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
@@ -242,6 +446,14 @@ func fieldVal(field string, o domain.RatioObservation) float64 {
 		return o.CacheReadUSDPer1M
 	case "cache_write":
 		return o.CacheWriteUSDPer1M
+	case "ratio":
+		// native multiplier (new-api model_ratio / sub2api rate_multiplier)
+		return o.NativeRatio
+	case "eff_in":
+		// effective input ratio = InputUSDPer1M / ($2 per ratio unit per 1M)
+		return o.InputUSDPer1M / 2.0
+	case "eff_out":
+		return o.OutputUSDPer1M / 2.0
 	default:
 		return o.InputUSDPer1M
 	}

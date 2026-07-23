@@ -21,13 +21,14 @@ import (
 
 // Rule types.
 const (
-	RuleDeltaPct          = "delta_pct"
-	RuleDeltaAbs          = "delta_abs"
-	RuleModelAdded        = "model_added"
-	RuleModelRemoved      = "model_removed"
-	RuleProbeMarkupPct    = "probe_markup_pct"
-	RuleEndpointAuthFail  = "endpoint_auth_failed"
-	RulePollFailureStreak = "poll_failure_streak"
+	RuleDeltaPct           = "delta_pct"
+	RuleDeltaAbs           = "delta_abs"
+	RuleModelAdded         = "model_added"
+	RuleModelRemoved       = "model_removed"
+	RuleProbeMarkupPct     = "probe_markup_pct"
+	RuleEndpointAuthFail   = "endpoint_auth_failed"
+	RulePollFailureStreak  = "poll_failure_streak"
+	RuleGroupRatioDeltaPct = "group_ratio_delta_pct"
 )
 
 // Rule is an alerting rule.
@@ -73,6 +74,14 @@ func Evaluate(rules []Rule, events []domain.ChangeEvent, probes []domain.ProbeRe
 			for _, e := range events {
 				if abs(e.DeltaAbs) >= r.Threshold {
 					out = append(out, fromChange(r.Name, e, map[string]any{"delta_abs": e.DeltaAbs}))
+				}
+			}
+		case RuleGroupRatioDeltaPct:
+			for _, e := range events {
+				if e.Field == domain.FieldGroupRatio && abs(e.DeltaPct) >= r.Threshold {
+					out = append(out, fromChange(r.Name, e, map[string]any{
+						"group": e.Group, "delta_pct": e.DeltaPct, "delta_abs": e.DeltaAbs,
+					}))
 				}
 			}
 		case RuleModelAdded:

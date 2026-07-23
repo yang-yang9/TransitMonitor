@@ -364,12 +364,98 @@ func (s *Store) DeleteStation(ctx context.Context, id string) error {
 
 // InsertSnapshot stores a raw snapshot payload.
 func (s *Store) InsertSnapshot(ctx context.Context, snap domain.RawSnapshot) error {
+	capsJSON := ""
+	if len(snap.GroupRatios) > 0 {
+		if b, err := json.Marshal(map[string]any{"group_ratios": snap.GroupRatios}); err == nil {
+			capsJSON = string(b)
+		}
+	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO snapshots (station_id, observed_at, endpoints, payloads, capabilities) VALUES (?,?,?,?,?)`,
 		snap.StationID, snap.ObservedAt.Unix(),
-		strings.Join(snap.EndpointsUsed, ","), []byte{}, "", // payloads/capabilities serialized later
+		strings.Join(snap.EndpointsUsed, ","), []byte{}, capsJSON,
 	)
 	return err
+}
+
+// LatestGroupRatios returns the most recently stored group_ratios for a station.
+func (s *Store) LatestGroupRatios(ctx context.Context, stationID string) (map[string]float64, error) {
+	var capsJSON string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT capabilities FROM snapshots WHERE station_id=? AND capabilities != '' ORDER BY observed_at DESC LIMIT 1`,
+		stationID).Scan(&capsJSON)
+	if err != nil {
+		return nil, err
+	}
+	var caps struct {
+		GroupRatios map[string]float64 `json:"group_ratios"`
+	}
+	if err := json.Unmarshal([]byte(capsJSON), &caps); err != nil {
+		return nil, err
+	}
+	return caps.GroupRatios, nil
+}
+
+// PrevGroupRatios returns the most recent group_ratios stored BEFORE `before`
+// for a station (nil, nil when none exists yet — e.g. first poll). Used by the
+// scheduler to diff against the previous snapshot before inserting the new one.
+func (s *Store) PrevGroupRatios(ctx context.Context, stationID string, before time.Time) (map[string]float64, error) {
+	var capsJSON string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT capabilities FROM snapshots
+		 WHERE station_id=? AND capabilities != '' AND observed_at < ?
+		 ORDER BY observed_at DESC LIMIT 1`,
+		stationID, before.Unix()).Scan(&capsJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var caps struct {
+		GroupRatios map[string]float64 `json:"group_ratios"`
+	}
+	if err := json.Unmarshal([]byte(capsJSON), &caps); err != nil {
+		return nil, err
+	}
+	return caps.GroupRatios, nil
+}
+
+// GroupRatioHistory returns up to `limit` most recent group-ratio snapshots for
+// a station, oldest-first, reconstructed from snapshots.capabilities. Used for
+// per-group trend sparklines.
+func (s *Store) GroupRatioHistory(ctx context.Context, stationID string, limit int) ([]domain.GroupRatioSnapshot, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT observed_at, capabilities FROM snapshots
+		 WHERE station_id=? AND capabilities != ''
+		 ORDER BY observed_at DESC LIMIT ?`, stationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var desc []domain.GroupRatioSnapshot
+	for rows.Next() {
+		var ts int64
+		var capsJSON string
+		if err := rows.Scan(&ts, &capsJSON); err != nil {
+			return nil, err
+		}
+		var caps struct {
+			GroupRatios map[string]float64 `json:"group_ratios"`
+		}
+		if err := json.Unmarshal([]byte(capsJSON), &caps); err != nil {
+			continue
+		}
+		desc = append(desc, domain.GroupRatioSnapshot{
+			ObservedAt: time.Unix(ts, 0), Ratios: caps.GroupRatios,
+		})
+	}
+	// reverse to oldest-first for sparkline left→right
+	out := make([]domain.GroupRatioSnapshot, len(desc))
+	for i := range desc {
+		out[i] = desc[len(desc)-1-i]
+	}
+	return out, rows.Err()
 }
 
 // DownsampleAndRetain deletes old snapshots (older than snapshotDays) and
