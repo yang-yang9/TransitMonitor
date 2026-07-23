@@ -148,7 +148,7 @@ tr.grp-sep td{padding:.45rem .6rem!important;background:var(--bg-1);border-botto
 .dot-s.ok{background:var(--ok);box-shadow:0 0 6px rgba(16,185,129,.4)}.dot-s.bad{background:var(--crit);box-shadow:0 0 6px rgba(239,68,68,.4)}.dot-s.none{background:#cbd5e1}
 
 /* ── tables ── */
-.tbl-wrap{overflow:auto;max-height:min(72vh,680px);border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow);-webkit-overflow-scrolling:touch}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow);-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;font-size:.88rem}
 thead th{position:sticky;top:0;z-index:2;background:var(--th-bg);text-align:left;padding:.6rem .75rem;border-bottom:2px solid var(--border);white-space:nowrap;font-weight:600;color:var(--th-ink);font-size:.8rem;text-transform:uppercase;letter-spacing:.03em}
 tbody td{padding:.5rem .75rem;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums;vertical-align:middle;transition:background .1s}
