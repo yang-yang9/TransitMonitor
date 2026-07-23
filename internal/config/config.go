@@ -17,6 +17,7 @@ import (
 // File is the top-level config.
 type File struct {
 	DB        DBConfig         `yaml:"db"`
+	Timezone string           `yaml:"timezone"` // display/audit timezone, e.g. "Asia/Shanghai" (default); "" → Asia/Shanghai
 	Stations  []domain.Station `yaml:"stations"`
 	Alerts    AlertsConfig     `yaml:"alerts"`
 	Dashboard DashboardConfig  `yaml:"dashboard"`
@@ -62,6 +63,9 @@ func Load(path string) (*File, error) {
 	}
 	if f.DB.Path == "" {
 		f.DB.Path = "transitmonitor.db"
+	}
+	if f.Timezone == "" {
+		f.Timezone = "Asia/Shanghai"
 	}
 	if f.Dashboard.Addr == "" {
 		f.Dashboard.Addr = "127.0.0.1:7421"

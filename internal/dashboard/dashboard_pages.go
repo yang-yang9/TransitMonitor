@@ -432,7 +432,9 @@ func fmtTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.UTC().Format("2006-01-02 15:04:05")
+	// Render in the process timezone (set from config.timezone, default
+	// Asia/Shanghai) so operators see wall-clock Beijing time, not UTC.
+	return t.Local().Format("2006-01-02 15:04:05")
 }
 
 func fmtUSD(v float64) string { return fmt.Sprintf("%.4f", v) }

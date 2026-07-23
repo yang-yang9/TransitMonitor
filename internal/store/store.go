@@ -169,7 +169,7 @@ func (s *Store) LatestRatioObservations(ctx context.Context, stationID string) (
 			return nil, err
 		}
 		o.DeclaredUnavailable = du == 1
-		o.ObservedAt = time.Unix(ts, 0).UTC()
+		o.ObservedAt = time.Unix(ts, 0).Local()
 		key := o.GroupName + "|" + o.ModelName
 		if seen[key] {
 			continue
@@ -215,7 +215,7 @@ func (s *Store) ListChangeEvents(ctx context.Context, stationID string, limit in
 			&e.DeltaAbs, &e.DeltaPct, &ts, &e.Severity); err != nil {
 			return nil, err
 		}
-		e.ObservedAt = time.Unix(ts, 0).UTC()
+		e.ObservedAt = time.Unix(ts, 0).Local()
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -257,7 +257,7 @@ func (s *Store) ListProbeResults(ctx context.Context, stationID string, limit in
 			return nil, err
 		}
 		r.DeclaredUnavailable = du == 1
-		r.ObservedAt = time.Unix(ts, 0).UTC()
+		r.ObservedAt = time.Unix(ts, 0).Local()
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -283,6 +283,7 @@ func (s *Store) ListAuditLogs(ctx context.Context, limit int) ([]domain.AuditEnt
 		if err := rows.Scan(&e.ID, &e.Ts, &e.Actor, &e.Action, &e.Target, &e.Detail); err != nil {
 			return nil, err
 		}
+		e.Ts = e.Ts.Local() // SQLite CURRENT_TIMESTAMP is UTC; render in the configured tz.
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -447,7 +448,7 @@ func (s *Store) GroupRatioHistory(ctx context.Context, stationID string, limit i
 			continue
 		}
 		desc = append(desc, domain.GroupRatioSnapshot{
-			ObservedAt: time.Unix(ts, 0), Ratios: caps.GroupRatios,
+			ObservedAt: time.Unix(ts, 0).Local(), Ratios: caps.GroupRatios,
 		})
 	}
 	// reverse to oldest-first for sparkline left→right
@@ -560,6 +561,7 @@ func (s *Store) ListAlertEvents(ctx context.Context, limit int) ([]AlertEventRow
 			return nil, err
 		}
 		r.Sent = sent == 1
+		r.Ts = r.Ts.Local() // SQLite CURRENT_TIMESTAMP is UTC; render in the configured tz.
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -587,7 +589,7 @@ func (s *Store) ObservationHistory(ctx context.Context, stationID, modelName str
 			return nil, err
 		}
 		o.DeclaredUnavailable = du == 1
-		o.ObservedAt = time.Unix(ts, 0).UTC()
+		o.ObservedAt = time.Unix(ts, 0).Local()
 		out = append(out, o)
 	}
 	return out, rows.Err()

@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // embed the IANA tzdb so time.LoadLocation works in slim containers (Alpine has no zoneinfo)
 
 	"transitmonitor/internal/adapter"
 	"transitmonitor/internal/alert"
@@ -78,6 +79,7 @@ func main() {
 	if v := os.Getenv("TRANSMONITOR_DASHBOARD_TOKEN"); v != "" {
 		cfg.Dashboard.Token = v
 	}
+	applyTimezone(logger, cfg.Timezone)
 
 	st, err := store.Open(cfg.DB.Path)
 	if err != nil {
@@ -153,6 +155,7 @@ func main() {
 		for range hupCh {
 			logger.Info("SIGHUP received, reloading config")
 			if cfg2, err := config.Load(configPath); err == nil {
+				applyTimezone(logger, cfg2.Timezone)
 				for _, st := range cfg2.Stations {
 					_ = sched.AddStation(st)
 				}
@@ -210,6 +213,22 @@ func envOr(key, dflt string) string {
 		return v
 	}
 	return dflt
+}
+
+// applyTimezone sets the process-wide default location (time.Local) so that all
+// time.Now()/Format calls, log timestamps, and JSON-marshalled time fields render
+// in the operator's wall-clock (e.g. Beijing time). Falls back to UTC with a
+// warning if the name is invalid (time/tzdata is embedded, so common IANA names
+// like Asia/Shanghai always resolve, even in slim containers).
+func applyTimezone(logger *slog.Logger, name string) {
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		logger.Error("timezone load failed; falling back to UTC", "timezone", name, "err", err)
+		time.Local = time.UTC
+		return
+	}
+	time.Local = loc
+	logger.Info("timezone applied", "timezone", name, "offset", time.Now().Format("-07:00"))
 }
 
 func deriveKeyFromEnv() []byte {

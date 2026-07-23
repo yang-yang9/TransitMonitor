@@ -29,3 +29,6 @@ config.yaml            # real station config (copy from config.example.yaml)
 .DS_Store
 .tmp/
 .claude/worktrees/
+
+# runtime logs
+*.log

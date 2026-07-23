@@ -30,6 +30,9 @@ func TestLoadExample(t *testing.T) {
 	if f.DB.Path != "transitmonitor.db" {
 		t.Errorf("db path: got %s", f.DB.Path)
 	}
+	if f.Timezone != "Asia/Shanghai" {
+		t.Errorf("timezone: want Asia/Shanghai, got %q", f.Timezone)
+	}
 	if len(f.Alerts.Rules) != 2 {
 		t.Errorf("want 2 alert rules, got %d", len(f.Alerts.Rules))
 	}

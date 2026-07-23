@@ -7,6 +7,8 @@
 db:
   path: transitmonitor.db
 
+timezone: "Asia/Shanghai"   # IANA timezone for dashboard/audit/log timestamps; default Asia/Shanghai
+
 dashboard:
   addr: "127.0.0.1:7421"
   token: ""                # set to require Authorization: Bearer <token> for non-localhost
