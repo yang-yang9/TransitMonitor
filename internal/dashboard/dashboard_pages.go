@@ -91,7 +91,7 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 	if tab == "" {
 		tab = "all"
 	}
-	evs, _ := s.store.ListChangeEvents(r.Context(), station, 100)
+	evs, _ := s.store.ListChangeEvents(r.Context(), station, paginationCap)
 	rows := make([][]string, 0, len(evs))
 	for _, e := range evs {
 		isGroup := e.Field == domain.FieldGroupRatio
@@ -130,12 +130,13 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 		return fmt.Sprintf(`<a class="%s" href="/changes?station=%s&tab=%s&_=%s">%s</a> `, cls, esc(station), key, matrixVer, t(lang, labelKey))
 	}
 	tabs := `<div class="field-sel">` + tabBtn("all", "btn.taball") + tabBtn("group", "btn.tabgroup") + tabBtn("model", "btn.tabmodel") + `</div>`
+	pageRows, pg := paginateRows(lang, "/changes", "page", r.URL.Query(), rows)
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
 		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p></div>` +
 		tabs + renderTable(lang, []string{
 		t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.field"),
 		t(lang, "col.old"), t(lang, "col.new"), t(lang, "col.deltapct"), t(lang, "col.severity"),
-	}, rows)
+	}, pageRows) + pg
 	writeHTMLShell(w, lang, t(lang, "title.changes")+" · "+station, "changes", body)
 }
 
@@ -145,7 +146,7 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 	if station == "" {
 		station = s.firstStation()
 	}
-	prs, _ := s.store.ListProbeResults(r.Context(), station, 100)
+	prs, _ := s.store.ListProbeResults(r.Context(), station, paginationCap)
 	rows := make([][]string, 0, len(prs))
 	for _, p := range prs {
 		mcls := "p-mid"
@@ -166,13 +167,14 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
+	pageRows, pg := paginateRows(lang, "/probes", "page", r.URL.Query(), rows)
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.probes") + `</h1><p class="sub">` +
 		fmt.Sprintf(t(lang, "sub.probes"), stag) + `</p></div>` +
 		renderTable(lang, []string{
 			t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.tokinout"),
 			t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"),
 			t(lang, "col.cost"), t(lang, "col.status"),
-		}, rows)
+		}, pageRows) + pg
 	writeHTMLShell(w, lang, t(lang, "title.probes")+" · "+station, "probes", body)
 }
 
@@ -412,7 +414,7 @@ func fieldLabel(field, lang string) string {
 
 func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
-	entries, _ := s.store.ListAuditLogs(r.Context(), 100)
+	entries, _ := s.store.ListAuditLogs(r.Context(), paginationCap)
 	rows := make([][]string, 0, len(entries))
 	for _, e := range entries {
 		rows = append(rows, []string{
@@ -423,8 +425,9 @@ func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
 			esc(e.Detail),
 		})
 	}
+	pageRows, pg := paginateRows(lang, "/audit", "page", r.URL.Query(), rows)
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.audit") + `</h1><p class="sub">` + t(lang, "sub.audit") + `</p></div>` +
-		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.actor"), t(lang, "col.action"), t(lang, "col.target"), t(lang, "col.detail")}, rows)
+		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.actor"), t(lang, "col.action"), t(lang, "col.target"), t(lang, "col.detail")}, pageRows) + pg
 	writeHTMLShell(w, lang, t(lang, "title.audit"), "audit", body)
 }
 
@@ -463,7 +466,7 @@ func fieldVal(field string, o domain.RatioObservation) float64 {
 
 func (s *Server) alertsHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
-	rows_data, _ := s.store.ListAlertEvents(r.Context(), 100)
+	rows_data, _ := s.store.ListAlertEvents(r.Context(), paginationCap)
 	rows := make([][]string, 0, len(rows_data))
 	for _, a := range rows_data {
 		sentBadge := `<span class="badge b-ok">✓</span>`
@@ -480,8 +483,9 @@ func (s *Server) alertsHTML(w http.ResponseWriter, r *http.Request) {
 			esc(a.Error),
 		})
 	}
+	pageRows, pg := paginateRows(lang, "/alerts", "page", r.URL.Query(), rows)
 	body := `<h1>` + t(lang, "title.alerts") + `</h1><p class="sub">` + t(lang, "sub.alerts") + `</p>` +
-		renderTable(lang, []string{t(lang, "col.time"), "rule", "station", "model", "payload", "sent", "error"}, rows)
+		renderTable(lang, []string{t(lang, "col.time"), "rule", "station", "model", "payload", "sent", "error"}, pageRows) + pg
 	writeHTMLShell(w, lang, t(lang, "title.alerts"), "alerts", body)
 }
 func truncate(s string, n int) string {

@@ -134,9 +134,9 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	// changes
-	evs, _ := s.store.ListChangeEvents(ctx, id, 20)
+	evs, _ := s.store.ListChangeEvents(ctx, id, paginationCap)
 	// probes
-	prs, _ := s.store.ListProbeResults(ctx, id, 20)
+	prs, _ := s.store.ListProbeResults(ctx, id, paginationCap)
 	probeRows := make([][]string, 0, len(prs))
 	for _, p := range prs {
 		mcls := "p-mid"
@@ -229,19 +229,25 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	// paginate the three log tables (group + model changes + probes); the
+	// <details> summaries show full totals, the tables show the current page.
+	q := r.URL.Query()
+	groupPage, gpg := paginateRows(lang, "/stations/"+id, "cpage", q, groupChangeRows)
+	modelPage, mpg := paginateRows(lang, "/stations/"+id, "mcpage", q, modelChangeRows)
+	probePage, ppg := paginateRows(lang, "/stations/"+id, "ppage", q, probeRows)
 	info := `<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span> ` + esc(st.BaseURL) +
 		` <span class="badge b-warn">⚠ ` + uptime + `</span>` +
 		` <a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
 	body := `<div class="page-hdr"><h1>` + esc(st.Name) + `</h1><p class="sub">` + info + `</p></div>` +
 		heroChart +
 		trendHTML +
-		`<h2>` + t(lang, "section.groupchanges") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.oldratio"), t(lang, "col.newratio"), t(lang, "col.deltapct"), t(lang, "col.severity")}, groupChangeRows) +
+		`<h2>` + t(lang, "section.groupchanges") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.oldratio"), t(lang, "col.newratio"), t(lang, "col.deltapct"), t(lang, "col.severity")}, groupPage) + gpg +
 		`<details class="sec"><summary>` + t(lang, "expand.models") + ` (` + fmt.Sprintf("%d", len(ratioRows)) + `)</summary>` +
 		renderRatioTable([]string{t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.modelratio"), t(lang, "col.completionratio"), t(lang, "col.groupratio"), t(lang, "col.effratio"), t(lang, "col.status")}, ratioRows) + `</details>` +
 		`<details class="sec"><summary>` + t(lang, "expand.modelchanges") + ` (` + fmt.Sprintf("%d", len(modelChangeRows)) + `)</summary>` +
-		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, modelChangeRows) + `</details>` +
+		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, modelPage) + mpg + `</details>` +
 		`<details class="sec"><summary>` + t(lang, "expand.probes") + ` (` + fmt.Sprintf("%d", len(probeRows)) + `)</summary>` +
-		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probeRows) + `</details>`
+		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probePage) + ppg + `</details>`
 	writeHTMLShell(w, lang, esc(st.Name), "stations", body)
 }
 

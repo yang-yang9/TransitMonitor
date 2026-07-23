@@ -4,9 +4,20 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 )
+
+// pageSize is the default rows-per-page for paginated tables. paginationCap is
+// the max rows fetched for in-memory pagination (older rows beyond the cap are
+// not reachable via the pager — keeps memory bounded on long-running installs).
+const (
+	pageSize    = 50
+	paginationCap = 2000
+)
+
 
 const appCSS = `
 :root{
@@ -137,14 +148,23 @@ tr.grp-sep td{padding:.45rem .6rem!important;background:var(--bg-1);border-botto
 .dot-s.ok{background:var(--ok);box-shadow:0 0 6px rgba(16,185,129,.4)}.dot-s.bad{background:var(--crit);box-shadow:0 0 6px rgba(239,68,68,.4)}.dot-s.none{background:#cbd5e1}
 
 /* ── tables ── */
-.tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow);-webkit-overflow-scrolling:touch}
+.tbl-wrap{overflow:auto;max-height:min(72vh,680px);border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow);-webkit-overflow-scrolling:touch}
 table{width:100%;border-collapse:collapse;font-size:.88rem}
-thead th{position:sticky;top:0;background:var(--th-bg);text-align:left;padding:.6rem .75rem;border-bottom:2px solid var(--border);white-space:nowrap;font-weight:600;color:var(--th-ink);font-size:.8rem;text-transform:uppercase;letter-spacing:.03em}
+thead th{position:sticky;top:0;z-index:2;background:var(--th-bg);text-align:left;padding:.6rem .75rem;border-bottom:2px solid var(--border);white-space:nowrap;font-weight:600;color:var(--th-ink);font-size:.8rem;text-transform:uppercase;letter-spacing:.03em}
 tbody td{padding:.5rem .75rem;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums;vertical-align:middle;transition:background .1s}
 tbody tr:last-child td{border-bottom:0}
 tbody tr{transition:background .1s}
 tbody tr:hover{background:var(--row)}
 .mono{font-family:var(--mono)}.num{text-align:right;white-space:nowrap}
+
+/* ── pager ── */
+.pager{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;padding:.55rem .2rem .1rem}
+.pg-info{color:var(--muted);font-size:.78rem;margin-right:auto}
+.pg-btn,.pg-num{display:inline-flex;align-items:center;justify-content:center;min-width:2rem;padding:.28rem .6rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--ink);font-size:.8rem;text-decoration:none;line-height:1.4}
+.pg-btn:hover,.pg-num:hover{border-color:var(--primary);color:var(--primary)}
+.pg-btn.disabled,.pg-num.disabled{opacity:.4;pointer-events:none}
+.pg-num.cur{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:700}
+.pg-gap{color:var(--muted);padding:0 .15rem}
 
 /* ── badges ── */
 .badge{display:inline-flex;align-items:center;gap:.3rem;padding:.18rem .6rem;border-radius:999px;font-size:.72rem;font-weight:700;line-height:1.5;white-space:nowrap;letter-spacing:.01em;transition:transform .1s}
@@ -353,6 +373,124 @@ func renderRatioTable(cols []string, rows [][]string) string {
 	}
 	b.WriteString("</tbody></table></div>")
 	return b.String()
+}
+
+// paginateRows slices rows for the current page (1-based, read from query key
+// pageKey) and returns the page slice + a rendered pager. q is the full query;
+// its other params are preserved across page links. total = len(rows).
+func paginateRows(lang, base, pageKey string, q url.Values, rows [][]string) ([][]string, string) {
+	total := len(rows)
+	pages := (total + pageSize - 1) / pageSize
+	if pages < 1 {
+		pages = 1
+	}
+	page := atoiDefault(q.Get(pageKey), 1)
+	if page < 1 {
+		page = 1
+	}
+	if page > pages {
+		page = pages
+	}
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	return rows[start:end], pager(lang, base, pageKey, q, page, pages, total)
+}
+
+// pager renders a prev/next + windowed page-number pager. All query params
+// from q are preserved on every link except pageKey (set per-link).
+func pager(lang, base, pageKey string, q url.Values, page, pages, total int) string {
+	clone := url.Values{}
+	for k, vs := range q {
+		clone[k] = vs
+	}
+	clone.Del(pageKey)
+	qs := clone.Encode()
+	link := func(n int) string {
+		if qs == "" {
+			return fmt.Sprintf("%s?%s=%d", base, pageKey, n)
+		}
+		return fmt.Sprintf("%s?%s&%s=%d", base, qs, pageKey, n)
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="pager"><span class="pg-info">`)
+	b.WriteString(fmt.Sprintf(t(lang, "pager.info"), total, page, pages))
+	b.WriteString(`</span>`)
+	if pages <= 1 {
+		b.WriteString(`</div>`)
+		return b.String()
+	}
+	if page > 1 {
+		b.WriteString(`<a class="pg-btn" href="` + link(page-1) + `">` + t(lang, "pager.prev") + `</a>`)
+	} else {
+		b.WriteString(`<span class="pg-btn disabled">` + t(lang, "pager.prev") + `</span>`)
+	}
+	for _, n := range pageWindow(page, pages) {
+		if n == 0 {
+			b.WriteString(`<span class="pg-gap">…</span>`)
+			continue
+		}
+		if n == page {
+			b.WriteString(`<span class="pg-num cur">` + strconv.Itoa(n) + `</span>`)
+		} else {
+			b.WriteString(fmt.Sprintf(`<a class="pg-num" href="%s">%d</a>`, link(n), n))
+		}
+	}
+	if page < pages {
+		b.WriteString(`<a class="pg-btn" href="` + link(page+1) + `">` + t(lang, "pager.next") + `</a>`)
+	} else {
+		b.WriteString(`<span class="pg-btn disabled">` + t(lang, "pager.next") + `</span>`)
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// pageWindow returns page-number slots to show; 0 marks an ellipsis gap.
+// Always includes first and last, plus a ±2 window around the current page.
+func pageWindow(page, pages int) []int {
+	if pages <= 7 {
+		out := make([]int, 0, pages)
+		for i := 1; i <= pages; i++ {
+			out = append(out, i)
+		}
+		return out
+	}
+	out := []int{1}
+	lo := page - 2
+	hi := page + 2
+	if lo < 2 {
+		lo = 2
+	}
+	if hi > pages-1 {
+		hi = pages - 1
+	}
+	if lo > 2 {
+		out = append(out, 0)
+	}
+	for i := lo; i <= hi; i++ {
+		out = append(out, i)
+	}
+	if hi < pages-1 {
+		out = append(out, 0)
+	}
+	out = append(out, pages)
+	return out
+}
+
+func atoiDefault(s string, d int) int {
+	if s == "" {
+		return d
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return d
+	}
+	return n
 }
 
 func severityBadge(lang, sev string) string {
