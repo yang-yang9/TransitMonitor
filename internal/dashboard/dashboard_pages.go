@@ -93,6 +93,8 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	evs, _ := s.store.ListChangeEvents(r.Context(), station, paginationCap)
 	rows := make([][]string, 0, len(evs))
+	timestamps := make([]time.Time, 0, len(evs))
+	severities := make([]string, 0, len(evs))
 	for _, e := range evs {
 		isGroup := e.Field == domain.FieldGroupRatio
 		switch tab {
@@ -119,6 +121,8 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 			`<span class="num">` + fmtPct(e.DeltaPct) + `</span>`,
 			severityBadge(lang, e.Severity),
 		})
+		timestamps = append(timestamps, e.ObservedAt)
+		severities = append(severities, e.Severity)
 	}
 	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
 	// tab filter
@@ -131,12 +135,37 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	tabs := `<div class="field-sel">` + tabBtn("all", "btn.taball") + tabBtn("group", "btn.tabgroup") + tabBtn("model", "btn.tabmodel") + `</div>`
 	pageRows, pg := paginateRows(lang, "/changes", "page", r.URL.Query(), rows)
-	body := `<div class="page-hdr"><h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
-		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p></div>` +
-		tabs + renderTable(lang, []string{
+	// slice timestamps/severities in sync with paginateRows
+	total := len(rows)
+	pages := (total + pageSize - 1) / pageSize
+	if pages < 1 {
+		pages = 1
+	}
+	page := atoiDefault(r.URL.Query().Get("page"), 1)
+	if page < 1 {
+		page = 1
+	}
+	if page > pages {
+		page = pages
+	}
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	pageTS := timestamps[start:end]
+	pageSev := severities[start:end]
+
+	cols := []string{
 		t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.field"),
 		t(lang, "col.old"), t(lang, "col.new"), t(lang, "col.deltapct"), t(lang, "col.severity"),
-	}, pageRows) + pg
+	}
+	body := `<div class="page-hdr"><h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
+		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p></div>` +
+		tabs + renderGroupedChangeTable(lang, cols, pageRows, pageTS, pageSev) + pg
 	writeHTMLShell(w, lang, t(lang, "title.changes")+" · "+station, "changes", body)
 }
 
@@ -452,6 +481,60 @@ func fmtChangeVal(lang, val string) string {
 		return v
 	}
 	return val
+}
+
+// renderGroupedChangeTable groups rows by ObservedAt timestamp. Batches with
+// ≤3 rows render inline; larger batches are wrapped in a collapsible
+// <details class="sec"> whose summary shows the timestamp, count and the
+// highest severity badge in that batch.
+func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []time.Time, sevs []string) string {
+	if len(rows) == 0 {
+		return renderTable(lang, cols, rows)
+	}
+	type batch struct {
+		rows [][]string
+		sev  string
+		ts   time.Time
+	}
+	var batches []batch
+	cur := batch{ts: ts[0]}
+	for i, row := range rows {
+		if ts[i] != cur.ts && len(cur.rows) > 0 {
+			batches = append(batches, cur)
+			cur = batch{ts: ts[i]}
+		}
+		cur.rows = append(cur.rows, row)
+		if sevRank(sevs[i]) > sevRank(cur.sev) {
+			cur.sev = sevs[i]
+		}
+	}
+	batches = append(batches, cur)
+
+	var b strings.Builder
+	for _, bt := range batches {
+		if len(bt.rows) <= 3 {
+			b.WriteString(renderTable(lang, cols, bt.rows))
+			continue
+		}
+		summary := fmt.Sprintf(t(lang, "batch.summary"), fmtTime(bt.ts), len(bt.rows))
+		b.WriteString(`<details class="sec"><summary>` + summary + ` ` + severityBadge(lang, bt.sev) + `</summary>`)
+		b.WriteString(renderTable(lang, cols, bt.rows))
+		b.WriteString(`</details>`)
+	}
+	return b.String()
+}
+
+func sevRank(s string) int {
+	switch s {
+	case "critical":
+		return 3
+	case "warning":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func fmtUSD(v float64) string { return fmt.Sprintf("%.4f", v) }
