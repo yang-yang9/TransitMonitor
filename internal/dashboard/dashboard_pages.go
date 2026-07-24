@@ -535,22 +535,30 @@ func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []
 				}
 			}
 		}
+		hasRatio := len(ratioRows) > 0
+		hasOther := len(otherRows) > 0
+		// Wrap ratio + other in a batch container so they look connected.
+		if hasRatio && hasOther {
+			b.WriteString(`<div class="change-batch">`)
+		}
 		// Ratio rows: always flat, highlighted.
-		if len(ratioRows) > 0 {
+		if hasRatio {
 			b.WriteString(renderHighlightedTable(lang, cols, ratioRows, "ratio-row"))
 		}
 		// Other rows: collapse if >3, otherwise flat.
-		if len(otherRows) == 0 {
-			continue
+		if hasOther {
+			if len(otherRows) <= 3 {
+				b.WriteString(renderTable(lang, cols, otherRows))
+			} else {
+				summary := fmt.Sprintf(t(lang, "batch.summary"), fmtTime(bt.ts), len(otherRows))
+				b.WriteString(`<details class="sec"><summary>` + summary + ` ` + severityBadge(lang, otherSev) + `</summary>`)
+				b.WriteString(renderTable(lang, cols, otherRows))
+				b.WriteString(`</details>`)
+			}
 		}
-		if len(otherRows) <= 3 {
-			b.WriteString(renderTable(lang, cols, otherRows))
-			continue
+		if hasRatio && hasOther {
+			b.WriteString(`</div>`)
 		}
-		summary := fmt.Sprintf(t(lang, "batch.summary"), fmtTime(bt.ts), len(otherRows))
-		b.WriteString(`<details class="sec"><summary>` + summary + ` ` + severityBadge(lang, otherSev) + `</summary>`)
-		b.WriteString(renderTable(lang, cols, otherRows))
-		b.WriteString(`</details>`)
 	}
 	return b.String()
 }

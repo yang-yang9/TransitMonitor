@@ -173,6 +173,12 @@ tr.grp-sep td{padding:.5rem .7rem!important;background:var(--bg-1);border-bottom
 tr.ratio-row{background:var(--primary-50);border-left:3px solid var(--primary)}
 tr.ratio-row td{font-weight:600}
 [data-theme="dark"] tr.ratio-row{background:rgba(20,184,166,.08)}
+.change-batch{margin:.5rem 0;border-left:3px solid var(--primary);border-radius:var(--radius);padding-left:0}
+.change-batch>.tbl-wrap,.change-batch>details{border-left:0;margin:0}
+.change-batch>.tbl-wrap{border-radius:var(--radius) var(--radius) 0 0}
+.change-batch>details{border-radius:0 0 var(--radius) var(--radius);border-top:0}
+.change-batch>.tbl-wrap:last-child{border-radius:var(--radius)}
+.change-batch>details:first-child{border-radius:var(--radius)}
 .muted-cell{background:var(--bg-1)}
 .b-strong{font-weight:700}
 .dot-s{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}
