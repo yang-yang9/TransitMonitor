@@ -482,14 +482,29 @@ func sparklineSVG(vals []float64, w, h int) string {
 	if rng < 1e-9 {
 		rng = 1
 	}
-	var pts []string
+	pad := 4.0
+	type pt struct{ x, y, v float64 }
+	points := make([]pt, len(vals))
+	var linePts []string
 	n := len(vals)
 	for i, v := range vals {
 		x := float64(i) / float64(n-1) * float64(w)
-		y := float64(h) - (v-lo)/rng*float64(h)
-		pts = append(pts, fmt.Sprintf("%.1f,%.1f", x, y))
+		y := (float64(h) - pad) - (v-lo)/rng*(float64(h)-2*pad) + pad/2
+		points[i] = pt{x, y, v}
+		linePts = append(linePts, fmt.Sprintf("%.1f,%.1f", x, y))
 	}
-	return fmt.Sprintf("<svg width=\"%d\" height=\"%d\" xmlns=\"http://www.w3.org/2000/svg\"><polyline points=\"%s\" fill=\"none\" stroke=\"var(--primary)\" stroke-width=\"1.5\"/></svg>", w, h, strings.Join(pts, " "))
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="spark-wrap"><svg class="sparksvg" viewBox="0 0 %d %d" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">`, w, h)
+	fmt.Fprintf(&b, `<polyline points="%s" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linejoin="round"/>`, strings.Join(linePts, " "))
+	last := points[len(points)-1]
+	fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="3" fill="var(--primary)"/>`, last.x, last.y)
+	b.WriteString(`</svg>`)
+	fmt.Fprintf(&b, `<div class="spark-dots" style="grid-template-columns:repeat(%d,1fr)">`, len(points))
+	for _, p := range points {
+		fmt.Fprintf(&b, `<span class="spark-dot" data-tip="%.6fx"></span>`, p.v)
+	}
+	b.WriteString(`</div></div>`)
+	return b.String()
 }
 
 // POST /api/stations/{id}/poll — trigger an immediate poll for a station.
