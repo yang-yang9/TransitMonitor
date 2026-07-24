@@ -73,6 +73,13 @@ func (s *Server) firstStation() string {
 	return ""
 }
 
+func (s *Server) stationName(id string) string {
+	if st, ok := s.findStation(id); ok && st.Name != "" {
+		return st.Name
+	}
+	return id
+}
+
 func sortedModels(set map[string]bool) []string {
 	out := make([]string, 0, len(set))
 	for m := range set {
@@ -127,8 +134,8 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 		severities = append(severities, e.Severity)
 		fields = append(fields, e.Field)
 	}
-	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
-	// tab filter
+	stName := s.stationName(station)
+	stag := `<span class="tag tag-pri">` + esc(stName) + `</span>`
 	tabBtn := func(key, labelKey string) string {
 		cls := "btn btn-sm btn-outline"
 		if key == tab {
@@ -170,7 +177,7 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
 		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p></div>` +
 		tabs + renderGroupedChangeTable(lang, cols, pageRows, pageTS, pageSev, pageFields) + pg
-	writeHTMLShell(w, lang, t(lang, "title.changes")+" · "+station, "changes", body)
+	writeHTMLShell(w, lang, t(lang, "title.changes")+" · "+stName, "changes", body)
 }
 
 func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +206,8 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 			statusBadge(lang, p.Error),
 		})
 	}
-	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
+	stName := s.stationName(station)
+	stag := `<span class="tag tag-pri">` + esc(stName) + `</span>`
 	pageRows, pg := paginateRows(lang, "/probes", "page", r.URL.Query(), rows)
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.probes") + `</h1><p class="sub">` +
 		fmt.Sprintf(t(lang, "sub.probes"), stag) + `</p></div>` +
@@ -208,7 +216,7 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 			t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"),
 			t(lang, "col.cost"), t(lang, "col.status"),
 		}, pageRows) + pg
-	writeHTMLShell(w, lang, t(lang, "title.probes")+" · "+station, "probes", body)
+	writeHTMLShell(w, lang, t(lang, "title.probes")+" · "+stName, "probes", body)
 }
 
 func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +293,7 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station) string {
 	}
 	cols := []string{t(lang, "col.group")}
 	for _, st := range sts {
-		cols = append(cols, esc(st.ID))
+		cols = append(cols, esc(st.Name))
 	}
 	dataRows := make([][]string, 0, len(groups))
 	for _, g := range groups {
@@ -353,7 +361,7 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 	models := sortedModels(modelSet)
 	cols := []string{t(lang, "col.model")}
 	for _, st := range sts {
-		cols = append(cols, esc(st.ID))
+		cols = append(cols, esc(st.Name))
 	}
 	rows := make([][]string, 0, len(models))
 	for _, m := range models {
@@ -635,7 +643,7 @@ func (s *Server) alertsHTML(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, []string{
 			`<span class="mono">` + fmtTime(a.Ts) + `</span>`,
 			`<span class="tag">` + esc(a.Rule) + `</span>`,
-			`<span class="mono">` + esc(a.StationID) + `</span>`,
+			`<span class="mono">` + esc(s.stationName(a.StationID)) + `</span>`,
 			`<span class="mono">` + esc(a.Model) + `</span>`,
 			`<span style="font-size:.8rem;color:var(--muted)">` + esc(truncate(a.Payload, 80)) + `</span>`,
 			sentBadge,

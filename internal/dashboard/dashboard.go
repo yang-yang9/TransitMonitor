@@ -285,7 +285,7 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 			esc(st.ID), esc(name), dot,
 			chart,
 			changeHint,
-			esc(string(st.Kind)), esc(st.ID),
+			esc(string(st.Kind)), esc(st.BaseURL),
 			grpCount, t(lang, "meta.groups"), t(lang, "meta.lastscrape"), lastStr))
 	}
 	b.WriteString(`</div>`)
