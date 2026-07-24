@@ -95,6 +95,7 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 	rows := make([][]string, 0, len(evs))
 	timestamps := make([]time.Time, 0, len(evs))
 	severities := make([]string, 0, len(evs))
+	fields := make([]string, 0, len(evs))
 	for _, e := range evs {
 		isGroup := e.Field == domain.FieldGroupRatio
 		switch tab {
@@ -123,6 +124,7 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 		})
 		timestamps = append(timestamps, e.ObservedAt)
 		severities = append(severities, e.Severity)
+		fields = append(fields, e.Field)
 	}
 	stag := `<span class="tag tag-pri">` + esc(station) + `</span>`
 	// tab filter
@@ -158,6 +160,7 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	pageTS := timestamps[start:end]
 	pageSev := severities[start:end]
+	pageFields := fields[start:end]
 
 	cols := []string{
 		t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.field"),
@@ -165,7 +168,7 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
 		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p></div>` +
-		tabs + renderGroupedChangeTable(lang, cols, pageRows, pageTS, pageSev) + pg
+		tabs + renderGroupedChangeTable(lang, cols, pageRows, pageTS, pageSev, pageFields) + pg
 	writeHTMLShell(w, lang, t(lang, "title.changes")+" · "+station, "changes", body)
 }
 
@@ -486,15 +489,19 @@ func fmtChangeVal(lang, val string) string {
 // renderGroupedChangeTable groups rows by ObservedAt timestamp. Batches with
 // ≤3 rows render inline; larger batches are wrapped in a collapsible
 // <details class="sec"> whose summary shows the timestamp, count and the
-// highest severity badge in that batch.
-func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []time.Time, sevs []string) string {
+// highest severity badge in that batch. group_ratio rows are ALWAYS rendered
+// inline (never collapsed) — ratio changes are the project's most important
+// data and must stay visible.
+func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []time.Time, sevs []string, fields []string) string {
 	if len(rows) == 0 {
 		return renderTable(lang, cols, rows)
 	}
 	type batch struct {
-		rows [][]string
-		sev  string
-		ts   time.Time
+		rows   [][]string
+		fields []string
+		sevs   []string
+		sev    string
+		ts     time.Time
 	}
 	var batches []batch
 	cur := batch{ts: ts[0]}
@@ -504,6 +511,8 @@ func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []
 			cur = batch{ts: ts[i]}
 		}
 		cur.rows = append(cur.rows, row)
+		cur.fields = append(cur.fields, fields[i])
+		cur.sevs = append(cur.sevs, sevs[i])
 		if sevRank(sevs[i]) > sevRank(cur.sev) {
 			cur.sev = sevs[i]
 		}
@@ -512,13 +521,34 @@ func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []
 
 	var b strings.Builder
 	for _, bt := range batches {
-		if len(bt.rows) <= 3 {
-			b.WriteString(renderTable(lang, cols, bt.rows))
+		// Split: group_ratio rows always inline, rest may collapse.
+		var ratioRows, otherRows [][]string
+		otherSev := ""
+		for i, row := range bt.rows {
+			if bt.fields[i] == domain.FieldGroupRatio {
+				ratioRows = append(ratioRows, row)
+			} else {
+				otherRows = append(otherRows, row)
+				if sevRank(bt.sevs[i]) > sevRank(otherSev) {
+					otherSev = bt.sevs[i]
+				}
+			}
+		}
+		// Ratio rows: always flat.
+		if len(ratioRows) > 0 {
+			b.WriteString(renderTable(lang, cols, ratioRows))
+		}
+		// Other rows: collapse if >3, otherwise flat.
+		if len(otherRows) == 0 {
 			continue
 		}
-		summary := fmt.Sprintf(t(lang, "batch.summary"), fmtTime(bt.ts), len(bt.rows))
-		b.WriteString(`<details class="sec"><summary>` + summary + ` ` + severityBadge(lang, bt.sev) + `</summary>`)
-		b.WriteString(renderTable(lang, cols, bt.rows))
+		if len(otherRows) <= 3 {
+			b.WriteString(renderTable(lang, cols, otherRows))
+			continue
+		}
+		summary := fmt.Sprintf(t(lang, "batch.summary"), fmtTime(bt.ts), len(otherRows))
+		b.WriteString(`<details class="sec"><summary>` + summary + ` ` + severityBadge(lang, otherSev) + `</summary>`)
+		b.WriteString(renderTable(lang, cols, otherRows))
 		b.WriteString(`</details>`)
 	}
 	return b.String()
