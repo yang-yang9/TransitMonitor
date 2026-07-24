@@ -14,10 +14,9 @@ import (
 // the max rows fetched for in-memory pagination (older rows beyond the cap are
 // not reachable via the pager — keeps memory bounded on long-running installs).
 const (
-	pageSize    = 50
+	pageSize      = 50
 	paginationCap = 2000
 )
-
 
 const appCSS = `
 :root{
@@ -244,7 +243,10 @@ tbody tr:hover{background:var(--row)}
 .field input:focus,.field select:focus{border-color:var(--primary);box-shadow:var(--input-ring)}
 .field input::placeholder{color:var(--muted);opacity:.6}
 .field input[readonly]{opacity:.5;cursor:not-allowed;background:var(--bg-2)}
-.field select{-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath fill='%2364748b' d='M2 4.5l5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right .8rem center;padding-right:2.2rem}
+.field select{-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath fill='%2364748b' d='M2 4.5l5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right .8rem center;padding-right:2.2rem;cursor:pointer}
+.field select option{background:var(--card);color:var(--ink);padding:.4rem .6rem}
+[data-theme="dark"] .field select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath fill='%2394a3b8' d='M2 4.5l5 5 5-5'/%3E%3C/svg%3E")}
+[data-theme="dark"] .field select option{background:#1e293b;color:#e5e7eb}
 .toggle{position:relative;display:inline-flex;align-items:center;gap:.6rem;cursor:pointer;font-size:.88rem;color:var(--ink)}
 .toggle input{position:absolute;opacity:0;width:0;height:0}
 .toggle .slider{width:46px;height:26px;background:var(--input-border);border-radius:13px;position:relative;transition:background .2s;flex-shrink:0}
@@ -253,7 +255,30 @@ tbody tr:hover{background:var(--row)}
 .toggle input:checked+.slider::after{transform:translateX(20px)}
 .toggle input:focus-visible+.slider{box-shadow:var(--input-ring)}
 
-/* ── misc ── */
+/* ── custom select ── */
+.csel{position:relative}
+.csel select{display:none}
+.csel-btn{display:flex;align-items:center;justify-content:space-between;width:100%;padding:.65rem .8rem;font-size:.88rem;font-family:inherit;color:var(--ink);background:var(--input-bg);border:2px solid var(--input-border);border-radius:var(--radius-sm);cursor:pointer;transition:border-color .15s,box-shadow .2s;outline:none;user-select:none}
+.csel-btn:hover{border-color:var(--primary)}
+.csel-btn:focus,.csel.open .csel-btn{border-color:var(--primary);box-shadow:var(--input-ring)}
+.csel-arrow{font-size:.7rem;color:var(--muted);transition:transform .15s}
+.csel.open .csel-arrow{transform:rotate(180deg)}
+.csel-drop{display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--card);border:1.5px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);z-index:20;overflow:hidden;max-height:240px;overflow-y:auto}
+.csel.open .csel-drop{display:block}
+.csel-opt{display:flex;align-items:center;gap:.5rem;padding:.55rem .85rem;font-size:.88rem;color:var(--ink);cursor:pointer;transition:background .1s}
+.csel-opt:hover{background:var(--primary-50)}
+.csel-opt.cur{background:var(--primary-50);color:var(--primary-700);font-weight:600}
+.csel-opt.cur::before{content:"✓";color:var(--primary);font-weight:700;font-size:.8rem}
+[data-theme="dark"] .csel-drop{background:var(--card);border-color:var(--border)}
+
+/* ── modal dialog ── */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+.modal-overlay.show{display:flex}
+.modal-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.6rem;min-width:320px;max-width:420px;box-shadow:var(--shadow-lg);text-align:center}
+.modal-box h3{font-size:1.05rem;font-weight:700;margin-bottom:.6rem;color:var(--ink)}
+.modal-box p{color:var(--muted);font-size:.9rem;margin-bottom:1.2rem;line-height:1.5}
+.modal-actions{display:flex;gap:.6rem;justify-content:center}
+[data-theme="dark"] .modal-overlay{background:rgba(0,0,0,.6)}
 .kvs{display:flex;flex-wrap:wrap;gap:.45rem;font-size:.85rem}
 .kvs b{color:var(--muted);font-weight:500}
 .empty{color:var(--muted);padding:2.5rem;text-align:center;font-size:.9rem}
@@ -335,7 +360,24 @@ func pageShell(lang, title, active, body string) string {
 		`window.tmToggleAuto=function(){var n=(localStorage.getItem('tm-autorefresh')||'1')==='1'?'0':'1';localStorage.setItem('tm-autorefresh',n);location.reload();};` +
 		`window.tmHam=function(){document.getElementById('tm-nav').classList.toggle('open');};` +
 		`document.addEventListener('click',function(e){var n=document.getElementById('tm-nav');if(n&&n.classList.contains('open')&&!e.target.closest('nav')&&!e.target.closest('.ham'))n.classList.remove('open');});` +
+		// custom select init
+		`document.querySelectorAll('.field select').forEach(function(sel){` +
+		`var w=document.createElement('div');w.className='csel';sel.parentNode.insertBefore(w,sel);w.appendChild(sel);` +
+		`var btn=document.createElement('div');btn.className='csel-btn';btn.tabIndex=0;btn.textContent=sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].text:'';` +
+		`var arr=document.createElement('span');arr.className='csel-arrow';arr.textContent='▾';btn.appendChild(arr);w.appendChild(btn);` +
+		`var drop=document.createElement('div');drop.className='csel-drop';` +
+		`Array.from(sel.options).forEach(function(o){var d=document.createElement('div');d.className='csel-opt'+(o.selected?' cur':'');d.textContent=o.text;d.dataset.val=o.value;` +
+		`d.onclick=function(){sel.value=this.dataset.val;sel.dispatchEvent(new Event('change'));btn.childNodes[0].textContent=this.textContent;drop.querySelectorAll('.csel-opt').forEach(function(x){x.classList.remove('cur')});this.classList.add('cur');w.classList.remove('open');};drop.appendChild(d);});` +
+		`w.appendChild(drop);btn.onclick=function(e){e.stopPropagation();document.querySelectorAll('.csel.open').forEach(function(c){if(c!==w)c.classList.remove('open')});w.classList.toggle('open');};` +
+		`});document.addEventListener('click',function(){document.querySelectorAll('.csel.open').forEach(function(c){c.classList.remove('open')})});` +
+		// custom modal confirm
+		`window.tmConfirm=function(msg,cb){var o=document.getElementById('tm-modal');var t=document.getElementById('tm-modal-msg');t.textContent=msg;o.classList.add('show');` +
+		`document.getElementById('tm-modal-ok').onclick=function(){o.classList.remove('show');cb();};document.getElementById('tm-modal-cancel').onclick=function(){o.classList.remove('show');};};` +
 		`})();</script>`
+	modalHTML := `<div class="modal-overlay" id="tm-modal"><div class="modal-box">` +
+		`<h3>` + t(lang, "modal.title") + `</h3><p id="tm-modal-msg"></p>` +
+		`<div class="modal-actions"><button class="btn btn-outline" id="tm-modal-cancel">` + t(lang, "modal.cancel") + `</button>` +
+		`<button class="btn btn-danger" id="tm-modal-ok">` + t(lang, "modal.confirm") + `</button></div></div></div>`
 	favicon := `<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314b8a6'/%3E%3Ctext x='16' y='23' font-size='16' font-weight='bold' fill='white' text-anchor='middle' font-family='sans-serif'%3ETM%3C/text%3E%3C/svg%3E">`
 	return fmt.Sprintf(`<!doctype html><html lang="%s"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">%s<title>%s · TransitMonitor</title><style>%s</style></head>`+
 		`<body><header class="top"><div class="top-row">`+
@@ -348,8 +390,8 @@ func pageShell(lang, title, active, body string) string {
 		`<a href="/api/stations">JSON API</a>`+
 		`<a href="/metrics">/metrics</a>`+
 		`<a href="/healthz">/healthz</a>`+
-		`</div></footer>%s</body></html>`,
-		lang, favicon, html.EscapeString(title), appCSS, n.String(), tools, body, js)
+		`</div></footer>%s%s</body></html>`,
+		lang, favicon, html.EscapeString(title), appCSS, n.String(), tools, body, modalHTML, js)
 }
 
 func writeHTMLShell(w http.ResponseWriter, lang, title, active, body string) {

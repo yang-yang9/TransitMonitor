@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"transitmonitor/internal/domain"
+	"transitmonitor/internal/jwtlogin"
 )
 
 // StationManager lets the dashboard add/remove stations at runtime
@@ -65,7 +66,7 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.stations") + `</h1>` +
 		`<p class="sub"><a class="btn" href="/stations/new">+ ` + t(lang, "title.newstation") + `</a></p></div>` +
 		renderTable(lang, []string{t(lang, "form.id"), t(lang, "form.name"), t(lang, "form.kind"), t(lang, "form.baseurl"), t(lang, "form.enabled"), ""}, rows) +
-		`<script>function tmDel(id){if(!confirm('` + t(lang, "form.confirm") + `'))return;fetch('/api/stations/'+id,{method:'DELETE'}).then(function(){location.reload();});}</script>`
+		`<script>function tmDel(id){tmConfirm('` + t(lang, "form.confirm") + `',function(){fetch('/api/stations/'+id,{method:'DELETE'}).then(function(){location.reload();});});}</script>`
 	writeHTMLShell(w, lang, t(lang, "title.stations"), "stations", body)
 }
 
@@ -278,7 +279,9 @@ func stationForm(lang string, edit *domain.Station) string {
 	kindNew, kindSub := "selected", ""
 	apiPH, patPH, jwtPH := "sk-...", "new-api PAT", "sub2api user JWT"
 	userIDVal, userIDPH := "", "new-api user ID (for New-Api-User header)"
+	adminEmailPH, adminPassPH := "admin@example.com", "password"
 	checkedAttr := "checked"
+	loginBtn := ""
 	if edit != nil {
 		method, action, idVal, idRO, title, submit = "PUT", "/api/stations/"+edit.ID, edit.ID, "readonly", t(lang, "title.editstation"), t(lang, "form.save")
 		idPH = ""
@@ -298,8 +301,12 @@ func stationForm(lang string, edit *domain.Station) string {
 			checkedAttr = "checked"
 		}
 		apiPH, patPH, jwtPH = t(lang, "form.keepblank"), t(lang, "form.keepblank"), t(lang, "form.keepblank")
+		adminEmailPH, adminPassPH = t(lang, "form.keepblank"), t(lang, "form.keepblank")
 		userIDVal = edit.Auth.UserID
 		userIDPH = t(lang, "form.keepblank")
+		if edit.Kind == domain.KindSub2API {
+			loginBtn = `<button class="btn btn-outline btn-sm" type="button" onclick="tmFetchJWT('` + esc(edit.ID) + `')">` + t(lang, "form.fetchjwt") + `</button>`
+		}
 	}
 	return `<div class="form-wrap"><div class="page-hdr"><h1>` + title + `</h1></div>
 <div class="card">
@@ -308,26 +315,56 @@ func stationForm(lang string, edit *domain.Station) string {
     <div class="field"><span class="field-label">` + t(lang, "form.id") + `</span><input name="id" value="` + esc(idVal) + `" placeholder="` + esc(idPH) + `" ` + idRO + `></div>
     <div class="field"><span class="field-label">` + t(lang, "form.name") + `</span><input name="name" required value="` + esc(nameVal) + `"></div>
     <div class="field full"><span class="field-label">` + t(lang, "form.baseurl") + `</span><input name="base_url" required value="` + esc(baseVal) + `" placeholder="https://relay.example.com"></div>
-    <div class="field"><span class="field-label">` + t(lang, "form.kind") + `</span><select name="kind"><option value="newapi" ` + kindNew + `>newapi</option><option value="sub2api" ` + kindSub + `>sub2api</option></select></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.kind") + `</span><select name="kind" onchange="tmKindSwitch(this.value)"><option value="newapi" ` + kindNew + `>newapi</option><option value="sub2api" ` + kindSub + `>sub2api</option></select></div>
     <div class="field"><span class="field-label">` + t(lang, "form.group") + `</span><input name="group" value="` + esc(groupVal) + `"></div>
     <div class="field"><span class="field-label">` + t(lang, "form.pollinterval") + `</span><input name="poll_interval" value="` + esc(pollVal) + `"></div>
     <div></div>
     <hr class="form-sep">
     <div class="field"><span class="field-label">` + t(lang, "form.apikey") + `</span><input name="api_key" placeholder="` + apiPH + `"></div>
+  </div>
+  <div id="tm-kind-newapi" class="form-grid">
     <div class="field"><span class="field-label">` + t(lang, "form.pat") + `</span><input name="pat" placeholder="` + patPH + `"></div>
     <div class="field"><span class="field-label">` + t(lang, "form.userid") + `</span><input name="user_id" value="` + esc(userIDVal) + `" placeholder="` + esc(userIDPH) + `"></div>
+  </div>
+  <div id="tm-kind-sub2api" class="form-grid">
     <div class="field"><span class="field-label">` + t(lang, "form.jwt") + `</span><input name="jwt" placeholder="` + jwtPH + `"></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.admin_email") + `</span><input name="admin_email" placeholder="` + esc(adminEmailPH) + `"></div>
+    <div class="field"><span class="field-label">` + t(lang, "form.admin_pass") + `</span><input name="admin_pass" type="password" placeholder="` + esc(adminPassPH) + `"></div>
+    <div class="field">` + loginBtn + `</div>
+  </div>
+  <div class="form-grid">
     <div class="field"><span class="field-label">` + t(lang, "form.enabled") + `</span><label class="toggle"><input type="checkbox" name="enabled" ` + checkedAttr + `><span class="slider"></span>` + t(lang, "form.enabled") + `</label></div>
   </div>
   <div class="btn-group" style="margin-top:1.2rem"><button class="btn" type="submit">` + submit + `</button><a class="btn btn-outline" href="/stations">&larr; ` + t(lang, "title.stations") + `</a></div>
 </form>
 </div>
 <script>
+function tmKindSwitch(k){
+  document.getElementById('tm-kind-newapi').style.display = k==='newapi'?'':'none';
+  document.getElementById('tm-kind-sub2api').style.display = k==='sub2api'?'':'none';
+}
+tmKindSwitch(document.querySelector('[name=kind]').value);
 function tmSubmit(m,u){
   var f=document.getElementById('stform'), v=function(n){var el=f[n]; if(!el) return ''; if(el.type=='checkbox') return el.checked; return el.value;};
-  var st={id:v('id'),name:v('name'),base_url:v('base_url'),kind:v('kind'),auth:{api_key:v('api_key'),pat:v('pat'),user_id:v('user_id'),jwt:v('jwt'),group:v('group')},poll_interval:v('poll_interval'),enabled:!!v('enabled')};
+  var st={id:v('id'),name:v('name'),base_url:v('base_url'),kind:v('kind'),auth:{api_key:v('api_key'),pat:v('pat'),user_id:v('user_id'),jwt:v('jwt'),admin_email:v('admin_email'),admin_pass:v('admin_pass'),group:v('group')},poll_interval:v('poll_interval'),enabled:!!v('enabled')};
   fetch(u,{method:m,headers:{'Content-Type':'application/json'},body:JSON.stringify(st)}).then(function(r){if(r.ok){location.href='/stations';}else{r.text().then(function(t){alert(t);});}}).catch(function(e){alert(e);});
   return false;
+}
+function tmFetchJWT(id){
+  var f=document.getElementById('stform'), v=function(n){var el=f[n]; if(!el) return ''; return el.value;};
+  var email=v('admin_email'), pass=v('admin_pass');
+  if(email||pass){
+    var st={id:v('id'),name:v('name'),base_url:v('base_url'),kind:v('kind'),auth:{api_key:v('api_key'),pat:v('pat'),user_id:v('user_id'),jwt:v('jwt'),admin_email:email,admin_pass:pass,group:v('group')},poll_interval:v('poll_interval'),enabled:!!f['enabled'].checked};
+    fetch('/api/stations/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(st)}).then(function(){
+      return fetch('/api/stations/'+id+'/login',{method:'POST'});
+    }).then(function(r){return r.json();}).then(function(d){
+      if(d.error){alert(d.error);}else{alert(d.message);location.reload();}
+    }).catch(function(e){alert(e);});
+  } else {
+    fetch('/api/stations/'+id+'/login',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
+      if(d.error){alert(d.error);}else{alert(d.message);location.reload();}
+    }).catch(function(e){alert(e);});
+  }
 }
 </script>
 </div>`
@@ -340,11 +377,13 @@ type stationInput struct {
 	BaseURL string `json:"base_url"`
 	Kind    string `json:"kind"`
 	Auth    struct {
-		APIKey string `json:"api_key"`
-		PAT    string `json:"pat"`
-		UserID string `json:"user_id"`
-		JWT    string `json:"jwt"`
-		Group  string `json:"group"`
+		APIKey     string `json:"api_key"`
+		PAT        string `json:"pat"`
+		UserID     string `json:"user_id"`
+		JWT        string `json:"jwt"`
+		AdminEmail string `json:"admin_email"`
+		AdminPass  string `json:"admin_pass"`
+		Group      string `json:"group"`
 	} `json:"auth"`
 	PollInterval string `json:"poll_interval"`
 	Enabled      bool   `json:"enabled"`
@@ -357,7 +396,11 @@ func (in stationInput) toStation() (domain.Station, error) {
 	}
 	return domain.Station{
 		ID: in.ID, Name: in.Name, BaseURL: in.BaseURL, Kind: domain.StationKind(in.Kind),
-		Auth:         domain.AuthConfig{APIKey: in.Auth.APIKey, PAT: in.Auth.PAT, UserID: in.Auth.UserID, JWT: in.Auth.JWT, Group: in.Auth.Group},
+		Auth: domain.AuthConfig{
+			APIKey: in.Auth.APIKey, PAT: in.Auth.PAT, UserID: in.Auth.UserID,
+			JWT: in.Auth.JWT, AdminEmail: in.Auth.AdminEmail, AdminPass: in.Auth.AdminPass,
+			Group: in.Auth.Group,
+		},
 		PollInterval: domain.Duration(d), Enabled: in.Enabled,
 	}, nil
 }
@@ -373,8 +416,16 @@ func (s *Server) stationsCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if in.BaseURL == "" || in.Kind == "" {
-		http.Error(w, "base_url, kind required", http.StatusBadRequest)
+	if in.Name == "" || in.BaseURL == "" || in.Kind == "" {
+		http.Error(w, "name, base_url, kind required", http.StatusBadRequest)
+		return
+	}
+	if in.Kind != "newapi" && in.Kind != "sub2api" {
+		http.Error(w, "kind must be newapi or sub2api", http.StatusBadRequest)
+		return
+	}
+	if in.Auth.APIKey == "" {
+		http.Error(w, "api_key (sk-) required", http.StatusBadRequest)
 		return
 	}
 	if in.ID == "" {
@@ -426,6 +477,12 @@ func (s *Server) stationsUpsert(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.Auth.JWT == "" {
 			in.Auth.JWT = existing.Auth.JWT
+		}
+		if in.Auth.AdminEmail == "" {
+			in.Auth.AdminEmail = existing.Auth.AdminEmail
+		}
+		if in.Auth.AdminPass == "" {
+			in.Auth.AdminPass = existing.Auth.AdminPass
 		}
 		if in.Auth.Group == "" {
 			in.Auth.Group = existing.Auth.Group
@@ -524,4 +581,38 @@ func (s *Server) stationsPoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"id": id, "status": "polled"})
+}
+
+// POST /api/stations/{id}/login — auto-login to sub2api and obtain a fresh JWT.
+func (s *Server) stationsLogin(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		http.Error(w, "station manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	id := chi.URLParam(r, "id")
+	st, ok := s.findStation(id)
+	if !ok {
+		writeJSON(w, 404, map[string]string{"error": "station not found"})
+		return
+	}
+	if st.Kind != domain.KindSub2API {
+		writeJSON(w, 400, map[string]string{"error": "JWT login only supported for sub2api stations"})
+		return
+	}
+	if st.Auth.AdminEmail == "" || st.Auth.AdminPass == "" {
+		writeJSON(w, 400, map[string]string{"error": t("en", "form.jwt.nocred")})
+		return
+	}
+	token, exp, err := jwtlogin.Login(r.Context(), st.BaseURL, st.Auth.AdminEmail, st.Auth.AdminPass, nil)
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	st.Auth.JWT = token
+	if err := s.mgr.AddStation(st); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	msg := fmt.Sprintf("JWT obtained, expires %s", exp.Format("2006-01-02 15:04:05"))
+	writeJSON(w, 200, map[string]string{"status": "ok", "message": msg, "expires_at": exp.Format(time.RFC3339)})
 }
