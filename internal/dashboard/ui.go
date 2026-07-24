@@ -170,6 +170,9 @@ details.sec[open]>summary{border-bottom:1px solid var(--border)}
 .rb-fill{display:block;height:100%;background:linear-gradient(90deg,var(--primary),var(--primary-300));border-radius:4px;box-shadow:0 0 6px rgba(20,184,166,.25)}
 tr.grp-sep td{padding:.5rem .7rem!important;background:var(--bg-1);border-bottom:2px solid var(--primary-100);font-weight:600}
 .grp-tag{font-weight:700;font-size:.88rem;color:var(--primary)}
+tr.ratio-row{background:var(--primary-50);border-left:3px solid var(--primary)}
+tr.ratio-row td{font-weight:600}
+[data-theme="dark"] tr.ratio-row{background:rgba(20,184,166,.08)}
 .muted-cell{background:var(--bg-1)}
 .b-strong{font-weight:700}
 .dot-s{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}

@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+	"html"
 	"math"
 	"net/http"
 	"sort"
@@ -534,9 +535,9 @@ func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []
 				}
 			}
 		}
-		// Ratio rows: always flat.
+		// Ratio rows: always flat, highlighted.
 		if len(ratioRows) > 0 {
-			b.WriteString(renderTable(lang, cols, ratioRows))
+			b.WriteString(renderHighlightedTable(lang, cols, ratioRows, "ratio-row"))
 		}
 		// Other rows: collapse if >3, otherwise flat.
 		if len(otherRows) == 0 {
@@ -551,6 +552,29 @@ func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []
 		b.WriteString(renderTable(lang, cols, otherRows))
 		b.WriteString(`</details>`)
 	}
+	return b.String()
+}
+
+// renderHighlightedTable is like renderTable but adds a CSS class to every <tr>.
+func renderHighlightedTable(lang string, cols []string, rows [][]string, rowClass string) string {
+	var b strings.Builder
+	b.WriteString(`<div class="tbl-wrap"><table><thead><tr>`)
+	for _, c := range cols {
+		b.WriteString("<th>")
+		b.WriteString(html.EscapeString(c))
+		b.WriteString("</th>")
+	}
+	b.WriteString("</tr></thead><tbody>")
+	for _, row := range rows {
+		b.WriteString(`<tr class="` + rowClass + `">`)
+		for _, cell := range row {
+			b.WriteString("<td>")
+			b.WriteString(cell)
+			b.WriteString("</td>")
+		}
+		b.WriteString("</tr>")
+	}
+	b.WriteString("</tbody></table></div>")
 	return b.String()
 }
 
