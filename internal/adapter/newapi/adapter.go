@@ -357,8 +357,20 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 	// (sk- key). Point the operator at the fix instead of silently ingesting junk.
 	if src != "/api/pricing" && !enabledFilterApplied {
 		reason := "no api_key is configured"
-		if a.APIKey != "" {
+		switch {
+		case a.APIKey != "":
 			reason = "/v1/models is unavailable for the configured api_key (key invalid or endpoint gated)"
+		case a.PAT == "" && a.APIKey == "":
+			// No creds at all — almost always an encKey mismatch (stored creds
+			// failed to decrypt and Auth loaded empty), not a station genuinely
+			// configured credential-free. Name the real cause so the operator
+			// fixes the key instead of re-entering creds that are already there.
+			reason = "no credentials loaded — the station's encrypted creds failed to decrypt (TRANSMONITOR_ENCRYPTION_KEY mismatch) or were never entered; verify the key matches the one used when the station was added, or re-enter its credentials"
+		default:
+			// A PAT is present but /api/pricing still gated (401) and no api_key:
+			// the PAT alone was insufficient. Say so, instead of the generic
+			// "no api_key" that implies the operator configured nothing.
+			reason = "no api_key is configured (the configured PAT did not unlock /api/pricing, and only a sk- key can drive /v1/models filtering)"
 		}
 		return snap, nil, fmt.Errorf(
 			"ratio source %s exposes %d configured models (including new-api's built-in default ratio map), "+

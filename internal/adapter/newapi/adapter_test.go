@@ -325,7 +325,36 @@ func TestFetchRatios_RatioConfigUnfiltered(t *testing.T) {
 			t.Errorf("error should mention %q (got: %s)", want, msg)
 		}
 	}
+	// No PAT and no api_key = no creds at all (the real-world encKey-mismatch
+	// shape). Guidance must name the actual cause, not just "no api_key".
+	if !strings.Contains(msg, "decrypt") {
+		t.Errorf("with no creds at all, error should mention decrypt/ENCRYPTION_KEY (got: %s)", msg)
+	}
 	_ = snap // RawSnapshot is discarded by the scheduler on FetchRatios error
+}
+
+// TestFetchRatios_RatioConfigUnfiltered_PATButNoAPIKey: a PAT IS configured but
+// /api/pricing stays gated (401) and no api_key. The refusal must NOT claim
+// "no credentials loaded" — the operator did configure a PAT; it just wasn't
+// enough. Guards the reason switch's default arm from false-flagging encKey.
+func TestFetchRatios_RatioConfigUnfiltered_PATButNoAPIKey(t *testing.T) {
+	_, a := startMock(t, mockCfg{
+		pricingStatus: 401, ratioConfigOK: true,
+		ratioConfig: ratioConfigData{ModelRatio: map[string]float64{"gpt-4o": 1.25}, GroupRatio: map[string]float64{"default": 1.0}},
+		pat:         "somepat", noAPIKey: true,
+	})
+	caps, _ := a.ProbeCapabilities(context.Background())
+	_, _, err := a.FetchRatios(context.Background(), caps)
+	if err == nil {
+		t.Fatal("expected a refusal error")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "no credentials loaded") {
+		t.Errorf("PAT is configured; should not say 'no credentials loaded': %s", msg)
+	}
+	if !strings.Contains(msg, "PAT") || !strings.Contains(msg, "api_key") {
+		t.Errorf("error should still mention PAT and api_key: %s", msg)
+	}
 }
 
 func TestFetchRatios_NoSource(t *testing.T) {

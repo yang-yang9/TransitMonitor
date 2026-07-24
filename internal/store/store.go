@@ -365,19 +365,35 @@ func (s *Store) UpsertStation(ctx context.Context, st domain.Station, encKey []b
 	return err
 }
 
+// StationLoadFailure records a station whose config blob loaded but whose
+// encrypted credentials could not be decrypted (encKey mismatch or corruption).
+// The station is still returned in the slice (with empty Auth) so polling can
+// surface a clear "no credentials loaded" error rather than silently ingesting
+// new-api's built-in default catalog as if it were the station's real catalog.
+type StationLoadFailure struct {
+	StationID string
+	Reason    string // e.g. "decrypt_failed"
+	Err       error
+}
+
 // ListStationsDB loads all persisted stations (config blob + decrypted creds).
-func (s *Store) ListStationsDB(ctx context.Context, encKey []byte) ([]domain.Station, error) {
+// Stations whose creds fail to decrypt are still returned (Auth zero-value)
+// AND reported in the failures slice — callers must surface this, not swallow
+// it, or the station silently polls with no credentials and the operator only
+// sees a misleading downstream "no api_key" error.
+func (s *Store) ListStationsDB(ctx context.Context, encKey []byte) ([]domain.Station, []StationLoadFailure, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, config_yaml FROM stations`)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	var out []domain.Station
+	var fails []StationLoadFailure
 	for rows.Next() {
 		var st domain.Station
 		var id, blob string
 		if err := rows.Scan(&id, &blob); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := json.Unmarshal([]byte(blob), &st); err != nil {
 			continue
@@ -386,14 +402,21 @@ func (s *Store) ListStationsDB(ctx context.Context, encKey []byte) ([]domain.Sta
 		if encKey != nil {
 			var ct, nonce []byte
 			if e := s.db.QueryRowContext(ctx, "SELECT ciphertext, nonce FROM credentials WHERE station_id=?", id).Scan(&ct, &nonce); e == nil {
-				if pt, e := secrets.Decrypt(encKey, ct, nonce); e == nil {
+				// A credentials row exists but the key won't decrypt it → encKey
+				// mismatch (or corruption). Report it instead of leaving Auth
+				// silently empty; otherwise the station polls credential-free and
+				// the operator only learns about it via a misleading "no api_key"
+				// refusal from the adapter, hiding the real cause.
+				if pt, derr := secrets.Decrypt(encKey, ct, nonce); derr != nil {
+					fails = append(fails, StationLoadFailure{StationID: id, Reason: "decrypt_failed", Err: derr})
+				} else {
 					_ = yaml.Unmarshal(pt, &st.Auth)
 				}
 			}
 		}
 		out = append(out, st)
 	}
-	return out, rows.Err()
+	return out, fails, rows.Err()
 }
 
 // DeleteStation removes a station and its (cascade) credentials.

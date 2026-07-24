@@ -92,13 +92,28 @@ func main() {
 
 	// Stations = YAML (authoritative, creds in-memory) + DB-persisted (web-added).
 	stations := cfg.Stations
+	decryptFailures := 0
 	if encKey != nil {
-		if dbSt, err := st.ListStationsDB(context.Background(), encKey); err == nil {
+		dbSt, fails, err := st.ListStationsDB(context.Background(), encKey)
+		if err == nil {
 			for _, dbs := range dbSt {
 				if !containsID(stations, dbs.ID) {
 					dbs.Enabled = true // DB-loaded stations default to enabled
 					stations = append(stations, dbs)
 				}
+			}
+			// A decrypt failure means the running TRANSMONITOR_ENCRYPTION_KEY does
+			// not match the one used when the station was added. The station still
+			// loads (empty Auth) so it keeps polling, but surface the real cause
+			// loudly — otherwise the operator only sees a misleading "no api_key"
+			// refusal downstream and chases the wrong fix.
+			for _, f := range fails {
+				decryptFailures++
+				logger.Error("station credentials could not be decrypted; loading with empty auth",
+					"station", f.StationID, "reason", f.Reason, "err", f.Err,
+					"fix", "re-enter the station's credentials via the web UI, or restart with the same TRANSMONITOR_ENCRYPTION_KEY used when the station was added")
+				_ = st.InsertAuditLog(context.Background(), "main", "creds.decrypt_failed", f.StationID,
+					fmt.Sprintf("reason=%s err=%v", f.Reason, f.Err))
 			}
 		}
 	}
@@ -119,7 +134,7 @@ func main() {
 	sched.Prober = probe.NewProber(httpClient)
 
 	_ = st.InsertAuditLog(context.Background(), "main", "startup", "",
-		fmt.Sprintf("version=%s stations=%d enc=%v", version, len(stations), encKey != nil))
+		fmt.Sprintf("version=%s stations=%d enc=%v decrypt_fails=%d", version, len(stations), encKey != nil, decryptFailures))
 
 	if once {
 		for _, s := range stations {

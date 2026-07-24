@@ -25,7 +25,7 @@ func TestStationCRUD(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	got, err := s.ListStationsDB(ctx, key)
+	got, _, err := s.ListStationsDB(ctx, key)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestStationCRUD(t *testing.T) {
 	if err := s.UpsertStation(ctx, st, key); err != nil {
 		t.Fatalf("upsert2: %v", err)
 	}
-	got2, _ := s.ListStationsDB(ctx, key)
+	got2, _, _ := s.ListStationsDB(ctx, key)
 	if len(got2) != 1 || got2[0].Name != "Renamed" {
 		t.Errorf("update failed: %+v", got2)
 	}
@@ -66,7 +66,7 @@ func TestStationCRUD(t *testing.T) {
 	if err := s.DeleteStation(ctx, "web-1"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	got3, _ := s.ListStationsDB(ctx, key)
+	got3, _, _ := s.ListStationsDB(ctx, key)
 	if len(got3) != 0 {
 		t.Errorf("after delete want 0 got %d", len(got3))
 	}
@@ -86,5 +86,47 @@ func TestStationCRUD_NoPlaintextCreds(t *testing.T) {
 	s.db.QueryRowContext(ctx, "SELECT config_yaml FROM stations WHERE id=?", "s").Scan(&blob)
 	if strings.Contains(blob, "sk-plaintext-secret") {
 		t.Errorf("plaintext creds leaked into stations.config_yaml: %s", blob)
+	}
+}
+
+// Decrypt failure (encKey mismatch) must be reported, not silently swallowed
+// into an empty-Auth station that later surfaces as a misleading "no api_key".
+func TestStationCRUD_DecryptFailureReported(t *testing.T) {
+	s, cleanup := newTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	goodKey := []byte("0123456789abcdef0123456789abcdef") // 32 bytes
+	st := domain.Station{ID: "x", Name: "x", Kind: domain.KindNewAPI, BaseURL: "https://x",
+		Auth: domain.AuthConfig{APIKey: "sk-secret"}}
+	if err := s.UpsertStation(ctx, st, goodKey); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// List with the WRONG key → decrypt must fail; the station is still
+	// returned (empty Auth) AND the failure is reported, not swallowed.
+	wrongKey := []byte("abcdef0123456789abcdef0123456789") // 32 bytes, different
+	got, fails, err := s.ListStationsDB(ctx, wrongKey)
+	if err != nil {
+		t.Fatalf("list err: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want station still loaded got %d", len(got))
+	}
+	if got[0].Auth.APIKey != "" {
+		t.Errorf("creds should be empty on decrypt failure: %+v", got[0].Auth)
+	}
+	if len(fails) != 1 || fails[0].StationID != "x" {
+		t.Fatalf("want 1 decrypt failure for x, got %+v", fails)
+	}
+	if !strings.Contains(fails[0].Reason, "decrypt") {
+		t.Errorf("reason should mention decrypt: %+v", fails[0])
+	}
+
+	// Correct key → no failures, creds restored.
+	got2, fails2, _ := s.ListStationsDB(ctx, goodKey)
+	if len(fails2) != 0 {
+		t.Errorf("correct key: want 0 failures got %+v", fails2)
+	}
+	if len(got2) != 1 || got2[0].Auth.APIKey != "sk-secret" {
+		t.Errorf("creds not restored with correct key: %+v", got2)
 	}
 }
