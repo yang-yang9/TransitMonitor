@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"transitmonitor/internal/domain"
+	"transitmonitor/internal/store"
 )
 
 func TestMetrics(t *testing.T) {
@@ -105,17 +107,29 @@ func TestMatrixModelGroupFilter(t *testing.T) {
 		t.Fatalf("want 200 got %d", r.Code)
 	}
 	body := r.Body.String()
-	for _, want := range []string{"2.0000", "4.0000", "vip", "std"} {
+	for _, want := range []string{"2.0000", "4.0000"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("cheapest mode: missing %q in body", want)
 		}
+	}
+	// Source-group attribution: the cheapest cell must tag its group structurally
+	// next to the price (not just appear somewhere via the selector chips).
+	if !strings.Contains(body, `2.0000</span><span class="cell-grp">vip</span>`) {
+		t.Errorf("cheapest mode: s1 cell should tag source group vip next to 2.0000:\n%s", body)
+	}
+	if !strings.Contains(body, `4.0000</span><span class="cell-grp">std</span>`) {
+		t.Errorf("cheapest mode: s2 cell should tag source group std next to 4.0000:\n%s", body)
 	}
 	// s1's std price (3.0) must NOT appear — it was collapsed away by the cheapest pick
 	if strings.Contains(body, "3.0000") {
 		t.Errorf("cheapest mode: s1 std price 3.0000 should not be rendered:\n%s", body)
 	}
+	// sub.matrixmodel subtitle is rendered in model mode
+	if !strings.Contains(body, "模型价格跨站对比") {
+		t.Errorf("cheapest mode: sub.matrixmodel subtitle missing")
+	}
 
-	// ?group=std narrows: s1 → 3.0, s2 → 4.0; no per-cell group tag
+	// ?group=std narrows: s1 → 3.0, s2 → 4.0; NO per-cell group tag (selector states it)
 	r2 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(r2, localReq(http.MethodGet, "/matrix?mode=model&field=input&group=std"))
 	if r2.Code != 200 {
@@ -127,6 +141,9 @@ func TestMatrixModelGroupFilter(t *testing.T) {
 			t.Errorf("group=std: missing %q in body", want)
 		}
 	}
+	if strings.Contains(body2, `class="cell-grp"`) {
+		t.Errorf("group=std: per-cell group tag should be omitted (selector already states group):\n%s", body2)
+	}
 	// s1's vip price (2.0) must NOT appear under the std filter
 	if strings.Contains(body2, "2.0000") {
 		t.Errorf("group=std: vip price 2.0000 should not be rendered:\n%s", body2)
@@ -134,19 +151,30 @@ func TestMatrixModelGroupFilter(t *testing.T) {
 }
 
 // TestMatrixGroupSort verifies the group×station matrix row ordering across the
-// three sort modes (median ratio / name / coverage). Distinctive group names
+// three sort modes (median ratio / name / coverage). A 3-station server is built
+// locally (newDash only registers s1/s2) so zebra carries an outlier and median
+// ≠ mean — locking in the median-sort design decision. Distinctive group names
 // avoid colliding with surrounding HTML, so first-match index reflects row order.
 func TestMatrixGroupSort(t *testing.T) {
-	srv, st, cleanup := newDash(t, "")
-	defer cleanup()
+	st, err := store.Open(filepath.Join(t.TempDir(), "sort.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	srv := New([]domain.Station{
+		{ID: "s1", Name: "S1", Kind: domain.KindNewAPI, BaseURL: "https://a.example", Enabled: true},
+		{ID: "s2", Name: "S2", Kind: domain.KindSub2API, BaseURL: "https://b.example", Enabled: true},
+		{ID: "s3", Name: "S3", Kind: domain.KindNewAPI, BaseURL: "https://c.example", Enabled: true},
+	}, st, "")
 	ctx := context.Background()
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
-	// s1: zebra=0.05, alpha=0.20, mango=0.12 ; s2: zebra=0.10, mango=0.30
-	// medians: zebra=0.075, alpha=0.20, mango=0.21
-	// cov:     zebra=2, mango=2, alpha=1
+	// s1: zebra=0.05, alpha=0.20, mango=0.12 ; s2: zebra=0.10, mango=0.30 ; s3: zebra=0.90 (outlier)
+	// medians: zebra=[0.05,0.10,0.90]→0.10 (≠ mean 0.35), alpha=0.20, mango=[0.12,0.30]→0.21
+	// cov:     zebra=3, mango=2, alpha=1
 	for sid, gr := range map[string]map[string]float64{
 		"s1": {"zebra": 0.05, "alpha": 0.20, "mango": 0.12},
 		"s2": {"zebra": 0.10, "mango": 0.30},
+		"s3": {"zebra": 0.90},
 	} {
 		_ = st.InsertSnapshot(ctx, domain.RawSnapshot{
 			StationID: sid, ObservedAt: now, GroupRatios: gr,
@@ -158,12 +186,11 @@ func TestMatrixGroupSort(t *testing.T) {
 	}
 	cases := []struct {
 		sort   string
-		want   []int // relative ordering: indexes must rise in this label sequence
 		labels []string
 	}{
-		{"ratio", []int{0, 1, 2}, []string{"zebra", "alpha", "mango"}}, // median asc
-		{"name", []int{0, 1, 2}, []string{"alpha", "mango", "zebra"}},  // alphabetical
-		{"cov", []int{0, 1, 2}, []string{"mango", "zebra", "alpha"}},   // coverage desc, name tie-break
+		{"ratio", []string{"zebra", "alpha", "mango"}}, // median asc: 0.10, 0.20, 0.21 (≠ mean order)
+		{"name", []string{"alpha", "mango", "zebra"}},  // alphabetical
+		{"cov", []string{"zebra", "mango", "alpha"}},   // coverage desc: 3, 2, 1
 	}
 	for _, c := range cases {
 		r := httptest.NewRecorder()
@@ -184,6 +211,12 @@ func TestMatrixGroupSort(t *testing.T) {
 				t.Errorf("sort=%s: expected %q before next, got index %d (prev %d)\n%s", c.sort, label, i, prev, body)
 			}
 			prev = i
+		}
+		// sort selector + group-mode subtitle render for every sort mode
+		for _, want := range []string{"倍率", "名称", "覆盖", "分组倍率跨站对比"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("sort=%s: missing %q in body", c.sort, want)
+			}
 		}
 	}
 }

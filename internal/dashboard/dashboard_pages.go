@@ -6,6 +6,7 @@ import (
 	"html"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -253,9 +254,19 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 	sts := s.stationsList() // cache once — avoids index-out-of-range if the list changes between calls
 
 	// mode toggle (group × station is the default; model × station is the drill-down)
+	// Each toggle preserves the other mode's state so a group→model→group
+	// round-trip doesn't silently reset sort/field/group.
+	groupExtra := "&sort=" + url.QueryEscape(sortMode)
+	modelExtra := "&field=" + url.QueryEscape(field)
+	if model != "" {
+		modelExtra += "&model=" + url.QueryEscape(model)
+	}
+	if group != "" {
+		modelExtra += "&group=" + url.QueryEscape(group)
+	}
 	toggle := `<div class="field-sel">` + t(lang, "col.field") + `: `
-	toggle += modeBtn("group", mode, lang, "btn.matrixgroup")
-	toggle += modeBtn("model", mode, lang, "btn.matrixmodel")
+	toggle += modeBtn("group", mode, lang, "btn.matrixgroup", groupExtra)
+	toggle += modeBtn("model", mode, lang, "btn.matrixmodel", modelExtra)
 	toggle += `</div>`
 
 	var tableHTML, subKey string
@@ -271,13 +282,14 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 	writeHTMLShell(w, lang, t(lang, "title.matrix"), "matrix", body)
 }
 
-// modeBtn renders a matrix mode toggle button (active when key==mode).
-func modeBtn(key, mode, lang, labelKey string) string {
+// modeBtn renders a matrix mode toggle button (active when key==mode). extraQ
+// carries preserved query params for the target mode (already &-prefixed, may be "").
+func modeBtn(key, mode, lang, labelKey, extraQ string) string {
 	cls := "btn btn-sm btn-outline"
 	if key == mode {
 		cls = "btn btn-sm"
 	}
-	return fmt.Sprintf(`<a class="%s" href="/matrix?mode=%s&_=%s">%s</a> `, cls, key, matrixVer, t(lang, labelKey))
+	return fmt.Sprintf(`<a class="%s" href="/matrix?mode=%s%s&_=%s">%s</a> `, cls, key, extraQ, matrixVer, t(lang, labelKey))
 }
 
 // matrixGroupTable renders the group × station matrix: rows = union of groups,
@@ -515,10 +527,10 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 		}
 		q := "?mode=model&field=" + f.key + "&_=" + matrixVer
 		if modelFilter != "" {
-			q += "&model=" + esc(modelFilter)
+			q += "&model=" + url.QueryEscape(modelFilter)
 		}
 		if groupFilter != "" {
-			q += "&group=" + esc(groupFilter)
+			q += "&group=" + url.QueryEscape(groupFilter)
 		}
 		selector += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, cls, q, f.label)
 	}
@@ -535,9 +547,9 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 	if groupFilter == "" {
 		allCls = "btn btn-sm"
 	}
-	allQ := "?mode=model&field=" + field + "&_=" + matrixVer
+	allQ := "?mode=model&field=" + url.QueryEscape(field) + "&_=" + matrixVer
 	if modelFilter != "" {
-		allQ += "&model=" + esc(modelFilter)
+		allQ += "&model=" + url.QueryEscape(modelFilter)
 	}
 	groupSel += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, allCls, allQ, t(lang, "btn.matrixallgroups"))
 	for _, g := range groups {
@@ -545,9 +557,9 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 		if g == groupFilter {
 			cls = "btn btn-sm"
 		}
-		q := "?mode=model&field=" + field + "&group=" + esc(g) + "&_=" + matrixVer
+		q := "?mode=model&field=" + url.QueryEscape(field) + "&group=" + url.QueryEscape(g) + "&_=" + matrixVer
 		if modelFilter != "" {
-			q += "&model=" + esc(modelFilter)
+			q += "&model=" + url.QueryEscape(modelFilter)
 		}
 		groupSel += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, cls, q, esc(g))
 	}
@@ -588,7 +600,7 @@ func fieldLabel(field, lang string) string {
 	case "cache_write":
 		return t(lang, "col.cachewrite")
 	}
-	return field
+	return esc(field)
 }
 
 func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
