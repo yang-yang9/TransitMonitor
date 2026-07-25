@@ -95,6 +95,9 @@ var trans = map[string]map[string]string{
 		"system.restarting":       "正在重启，页面将在几秒后自动刷新…",
 		"system.no_updater":       "更新服务未接入（仅 Release 构建可自更新）",
 		"system.wrapper_needed":   "当前镜像未启用 wrapper entrypoint：面板内更新后容器重建会丢失新二进制。请先拉取 v0.0.2+ 的镜像（含 wrapper）后再使用面板内更新。",
+		"system.checking":         "检查中…",
+		"system.error":            "出错",
+		"system.rollback_empty":   "暂无可回退的本地版本（升级一次后这里会保留最近 3 份）",
 	},
 	"en": {
 		"nav.overview": "Overview", "nav.matrix": "Matrix", "nav.changes": "Changes",
@@ -185,6 +188,9 @@ var trans = map[string]map[string]string{
 		"system.restarting":       "Restarting; the page will auto-reload in a few seconds…",
 		"system.no_updater":       "Update service not wired (release builds only)",
 		"system.wrapper_needed":   "This image lacks the wrapper entrypoint: an in-panel upgrade would be lost on container recreation. Re-pull a v0.0.2+ image (with the wrapper) before using in-panel update.",
+		"system.checking":         "Checking…",
+		"system.error":            "Error",
+		"system.rollback_empty":   "No local versions to roll back to yet — upgrade once and the last 3 are retained here.",
 	},
 }
 
