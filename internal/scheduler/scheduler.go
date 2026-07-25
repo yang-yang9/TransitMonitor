@@ -237,6 +237,7 @@ func (s *Scheduler) AddStation(st domain.Station) error {
 		s.stationList = append(s.stationList, st)
 	}
 	s.Adapters[st.ID] = a
+	s.wireJWTPersistLocked(st.ID, a)
 	if st.Enabled {
 		s.startStationLocked(s.runCtx, st)
 	}
@@ -365,11 +366,49 @@ func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs 
 	}
 }
 
+// wireJWTPersistLocked injects a persist callback into adapters that implement
+// adapter.JWPersister, so a reactive JWT re-login (e.g. sub2api on a 401
+// fingerprint-stale token) survives to the store + in-memory station list.
+// Caller must hold s.mu.
+func (s *Scheduler) wireJWTPersistLocked(stationID string, a adapter.Adapter) {
+	if a == nil {
+		return
+	}
+	jp, ok := a.(adapter.JWPersister)
+	if !ok {
+		return
+	}
+	jp.SetJWTPersistFn(s.makeJWTPersistFn(stationID))
+}
+
+// makeJWTPersistFn returns a callback that updates the station's JWT in the
+// in-memory list and re-persists (encrypted) to the store.
+func (s *Scheduler) makeJWTPersistFn(stationID string) func(jwt string) {
+	return func(jwt string) {
+		s.mu.Lock()
+		var st domain.Station
+		for i, x := range s.stationList {
+			if x.ID == stationID {
+				s.stationList[i].Auth.JWT = jwt
+				st = s.stationList[i]
+				break
+			}
+		}
+		s.mu.Unlock()
+		if st.ID == "" || s.EncKey == nil || s.Store == nil || s.runCtx == nil {
+			return
+		}
+		_ = s.Store.UpsertStation(s.runCtx, st, s.EncKey)
+		s.logger().Info("jwt persisted after reactive refresh", "station", stationID)
+	}
+}
+
 // Run polls each enabled station and runs a daily retention job until ctx cancelled.
 func (s *Scheduler) Run(ctx context.Context) {
 	s.mu.Lock()
 	s.runCtx = ctx
 	for _, st := range s.stationList {
+		s.wireJWTPersistLocked(st.ID, s.Adapters[st.ID])
 		if !st.Enabled {
 			s.logger().Info("skip disabled station", "station", st.ID)
 			continue

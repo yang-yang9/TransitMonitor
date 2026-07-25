@@ -28,13 +28,20 @@ type JWTRefresher interface {
 	SetJWT(jwt string)
 }
 
+// JWPersister is optionally implemented by adapters that accept a callback to
+// persist a refreshed JWT (so it survives restarts). The scheduler wires this
+// to its store + in-memory station list.
+type JWPersister interface {
+	SetJWTPersistFn(fn func(jwt string))
+}
+
 // NewAdapter builds the right adapter for a station's kind.
 func NewAdapter(s domain.Station, client *http.Client) (Adapter, error) {
 	switch s.Kind {
 	case domain.KindNewAPI:
 		return newapi.New(s.ID, s.BaseURL, s.Auth.PAT, s.Auth.UserID, s.Auth.APIKey, s.Auth.Group, client), nil
 	case domain.KindSub2API:
-		return sub2api.New(s.ID, s.BaseURL, s.Auth.APIKey, s.Auth.JWT, s.Auth.AdminAPIKey, s.Auth.Group, client), nil
+		return sub2api.New(s.ID, s.BaseURL, s.Auth.APIKey, s.Auth.JWT, s.Auth.AdminAPIKey, s.Auth.AdminEmail, s.Auth.AdminPass, s.Auth.Group, client), nil
 	default:
 		return nil, fmt.Errorf("unknown station kind %q for station %s", s.Kind, s.ID)
 	}

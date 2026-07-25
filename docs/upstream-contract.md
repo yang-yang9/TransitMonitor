@@ -52,12 +52,16 @@
 | `/api/v1/admin/groups`、`/all`、`/:id`、`/:id/rate-multipliers` | GET | admin(x-api-key 或 admin JWT) | 全组倍率 + 每用户覆写 | `routes/admin.go:316-328` |
 | `/api/v1/admin/channels`、`/:id`、`/model-pricing?model=X` | GET | admin | 每模型 per-token USD + 每通道覆写 | `routes/admin.go:699-704` |
 | `/api/v1/channels/available` | GET | user JWT + available-channels flag | 组+模型价一体（用户侧最全） | `handler/available_channel_handler.go:~121` |
-| `/v1/models` | GET | sk-key | 模型清单（无价） | `handler/gateway_handler.go:~1005` |
+| `/api/v1/groups/available` | GET | user JWT（**无 available-channels 开关、不查余额**） | 用户可见的所有分组 + 各自 `rate_multiplier`（**非管理员的分组倍率首选源**） | `handler/api_key_handler.go:275` `GetAvailableGroups` |
+| `/v1/models` | GET | sk-key | 模型清单（无价，余额不足返 403 `INSUFFICIENT_BALANCE`） | `handler/gateway_handler.go:~1005` |
 
 ### 鉴权
 - sk-key：`Authorization: Bearer <sk>` 或 `x-api-key`/`x-goog-api-key`（`middleware/api_key_auth.go:58-83`）；`?key=`/`?api_key=` 已废弃→400（`:50-54`）。
 - admin：`x-api-key: <admin-api-key>`（存 settings 表非 env，`middleware/admin_auth.go:127` `GetAdminAPIKey`）或 `Authorization: Bearer <admin-jwt>`（env `ADMIN_EMAIL/ADMIN_PASSWORD`+`JWT_SECRET`，见 `deploy/.env.example:196-209`）。
-- 用户登录：`POST /auth/login` body `{"email":"...","password":"..."}` → `{"token":"<jwt>"}` (JWT 含 `exp` claim)。`/auth/login/2fa` 用于 2FA 场景。`/auth/login`、`/auth/register`、`/auth/send-verify-code` 有服务端限流。TransitMonitor 用此端点自动获取/刷新 JWT。
+- 用户登录：`POST /api/v1/auth/login` body `{"email":"...","password":"..."}` → `{"code":0,"message":"success","data":{"access_token":"<jwt>","refresh_token":"...","expires_in":<秒>,"token_type":"Bearer"}}`（JWT 含 `exp` claim）。⚠ 路径是 `/api/v1/auth/login`，不是 `/auth/login`——后者返回前端 HTML（SPA 兜底），不是 JSON。`/auth/login/2fa` 用于 2FA。`/auth/login`、`/auth/register`、`/auth/send-verify-code` 有服务端限流。TransitMonitor 用此端点自动获取/刷新 JWT。
+- ⚠ JWT 会话绑定**网络指纹**：同一 JWT 在几分钟内会被判 "Session network fingerprint changed" → 401。TransitMonitor 适配器在 `/api/v1/channels/available` 返 401 时自动重新登录并重试（`Adapter.channelsGet`），并通过 `JWPersister` 回调把新 JWT 落库。
+- ⚠ `/api/v1/channels/available` 受 `available-channels` 功能开关控制（**默认关**，opt-in）。关闭时返回 `{"code":0,"data":[]}` 空数组——无逐模型价。开启需在 sub2api 后台打开。
+- ⚠ `/v1/models` 受账户余额限制：余额不足时返 403 `{"code":"INSUFFICIENT_BALANCE"}`（这是 LiteLLM 兜底价来源，会被拦）。
 
 ### 探测信号
 - `GET /v1/usage`（sk-key，`routes/gateway.go:159`）→ `{today/total:{cost, actual_cost, input_tokens, output_tokens, total_tokens}}`；`actual_cost` 已含倍率+peak。

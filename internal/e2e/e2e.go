@@ -90,6 +90,16 @@ func mockSub2API(s *mockState) *httptest.Server {
 		_, _, _, in, out := s.snapshot()
 		fmt.Fprintf(w, `{"success":true,"data":[{"name":"c1","platforms":[{"platform":"anthropic","supported_models":[{"name":"gpt-4o-mini","pricing":{"input_price":%v,"output_price":%v}}]}]}]}`, in, out)
 	})
+	mux.HandleFunc("/api/v1/groups/available", func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer jwt-test" && !isValidMockJWT(auth) {
+			w.WriteHeader(401)
+			return
+		}
+		_, _, eff, _, _ := s.snapshot()
+		// two groups so the multi-group ratio path is exercised; both scale with eff
+		fmt.Fprintf(w, `{"code":0,"message":"success","data":[{"name":"default","platform":"openai","rate_multiplier":%v,"status":"active"},{"name":"pro","platform":"anthropic","rate_multiplier":%v,"status":"active"}]}`, eff, eff*1.5)
+	})
 	mux.HandleFunc("/api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(405)

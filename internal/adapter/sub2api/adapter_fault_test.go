@@ -13,7 +13,7 @@ func TestFetchRatios_BillingMalformedJSON(t *testing.T) {
 		w.Write([]byte(`{broken`))
 	}))
 	defer srv.Close()
-	a := New("s1", srv.URL, "sk-1", "", "", "default", srv.Client())
+	a := New("s1", srv.URL, "sk-1", "", "", "", "", "default", srv.Client())
 	caps, _ := a.ProbeCapabilities(context.Background())
 	_, _, err := a.FetchRatios(context.Background(), caps)
 	if err == nil {
@@ -31,7 +31,7 @@ func TestFetchRatios_ChannelsMalformedJSON(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	a := New("s1", srv.URL, "sk-1", "jwt-1", "", "default", srv.Client())
+	a := New("s1", srv.URL, "sk-1", "jwt-1", "", "", "", "default", srv.Client())
 	caps, _ := a.ProbeCapabilities(context.Background())
 	_, _, err := a.FetchRatios(context.Background(), caps)
 	// malformed channels JSON should not fatal — the adapter should degrade gracefully

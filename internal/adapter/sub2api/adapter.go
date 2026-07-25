@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"transitmonitor/internal/domain"
+	"transitmonitor/internal/jwtlogin"
 	"transitmonitor/internal/normalize"
 )
 
@@ -29,13 +30,16 @@ type Adapter struct {
 	APIKey      string // sk- key for /v1/* + billing
 	JWT         string // user JWT for /api/v1/channels/available
 	AdminAPIKey string // x-api-key for /api/v1/admin/* (reserved; v1 uses channels/available)
+	AdminEmail  string // admin email for /api/v1/auth/login (auto JWT refresh)
+	AdminPass   string // admin password for /api/v1/auth/login (auto JWT refresh)
 	Group       string
 	Client      *http.Client
+	persistJWT  func(jwt string) // optional: persist a refreshed JWT (store + station list)
 	now         func() time.Time
 }
 
 // New constructs a sub2api adapter. group defaults to "default".
-func New(stationID, baseURL, apiKey, jwt, adminAPIKey, group string, client *http.Client) *Adapter {
+func New(stationID, baseURL, apiKey, jwt, adminAPIKey, adminEmail, adminPass, group string, client *http.Client) *Adapter {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -44,7 +48,8 @@ func New(stationID, baseURL, apiKey, jwt, adminAPIKey, group string, client *htt
 	}
 	return &Adapter{
 		StationID: stationID, BaseURL: baseURL, APIKey: apiKey, JWT: jwt,
-		AdminAPIKey: adminAPIKey, Group: group, Client: client, now: time.Now,
+		AdminAPIKey: adminAPIKey, AdminEmail: adminEmail, AdminPass: adminPass,
+		Group: group, Client: client, now: time.Now,
 	}
 }
 
@@ -53,6 +58,42 @@ func (a *Adapter) SetClock(f func() time.Time) { a.now = f }
 
 // SetJWT updates the JWT used for authenticated endpoints (e.g. after auto-login refresh).
 func (a *Adapter) SetJWT(jwt string) { a.JWT = jwt }
+
+// SetJWTPersistFn injects a callback that persists a refreshed JWT (encrypted
+// to the store + updates the in-memory station list). Implements adapter.JWPersister.
+func (a *Adapter) SetJWTPersistFn(fn func(jwt string)) { a.persistJWT = fn }
+
+// refreshJWT re-logs in via /api/v1/auth/login, updates a.JWT (in-memory), and
+// persists via the callback if set. Returns the new JWT and an error.
+func (a *Adapter) refreshJWT(ctx context.Context) (string, error) {
+	if a.AdminEmail == "" || a.AdminPass == "" {
+		return "", fmt.Errorf("admin email/pass not configured for JWT refresh")
+	}
+	token, _, err := jwtlogin.Login(ctx, a.BaseURL, a.AdminEmail, a.AdminPass, a.Client)
+	if err != nil {
+		return "", err
+	}
+	a.JWT = token
+	if a.persistJWT != nil {
+		a.persistJWT(token)
+	}
+	return token, nil
+}
+
+// jwtGet fetches a JWT-authenticated path. If the JWT is fingerprint-stale
+// (401) and admin creds are configured, it re-logs in and retries once.
+// Returns (status, body, err).
+func (a *Adapter) jwtGet(ctx context.Context, path string) (int, []byte, error) {
+	status, body, err := a.doGet(ctx, path, a.JWT)
+	if err != nil || status != http.StatusUnauthorized {
+		return status, body, err
+	}
+	// 401: JWT fingerprint-stale (or invalid). Re-login once if we can, then retry.
+	if _, lerr := a.refreshJWT(ctx); lerr != nil {
+		return status, body, err // keep the original 401 error
+	}
+	return a.doGet(ctx, path, a.JWT)
+}
 
 func (a *Adapter) nowTime() time.Time {
 	if a.now != nil {
@@ -101,6 +142,21 @@ type availableChannel struct {
 type channelsAvailableResp struct {
 	Success bool               `json:"success"`
 	Data    []availableChannel `json:"data"`
+}
+
+// groupsAvailableResp is GET /api/v1/groups/available (user JWT, no
+// available-channels flag, no balance check). Returns every group the user can
+// see with its rate_multiplier — the richest per-group ratio source available
+// to a non-admin customer.
+type groupsAvailableResp struct {
+	Code int `json:"code"`
+	Data []struct {
+		Name               string  `json:"name"`
+		RateMultiplier     float64 `json:"rate_multiplier"`
+		PeakRateEnabled    bool    `json:"peak_rate_enabled"`
+		PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
+		Status             string  `json:"status"`
+	} `json:"data"`
 }
 
 func (a *Adapter) doGet(ctx context.Context, path, bearer string) (int, []byte, error) {
@@ -163,7 +219,11 @@ func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityRepor
 		}
 	}
 	if a.JWT != "" {
-		if status, _, err := a.doGet(ctx, "/api/v1/channels/available", a.JWT); err == nil {
+		if status, _, err := a.jwtGet(ctx, "/api/v1/groups/available"); err == nil {
+			caps.HasUserGroups = status == 200
+			caps.Endpoints = append(caps.Endpoints, endpoint("/api/v1/groups/available", status, nil, now))
+		}
+		if status, _, err := a.jwtGet(ctx, "/api/v1/channels/available"); err == nil {
 			caps.HasUserChannels = status == 200
 			caps.Endpoints = append(caps.Endpoints, endpoint("/api/v1/channels/available", status, nil, now))
 		}
@@ -199,12 +259,48 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 			}
 			effective = br.EffectiveRateMultiplier
 			peakInfo = formatPeak(&br)
+			// Record the group rate multiplier so the dashboard shows the station's
+			// core group ratio even when no per-model source yields models (e.g.
+			// available-channels feature flag off + /v1/models gated by balance).
+			// Group ratio is the project's most important data point.
+			grp := a.Group
+			if grp == "" {
+				grp = "default"
+			}
+			if br.GroupRateMultiplier > 0 {
+				snap.GroupRatios = map[string]float64{grp: br.GroupRateMultiplier}
+			}
+		}
+	}
+
+	// Per-group ratios from /api/v1/groups/available (user JWT). This is the
+	// richest group-ratio source for a non-admin customer: it returns every
+	// group the user can see with its rate_multiplier — no available-channels
+	// feature flag, no balance check. Overrides the billing-derived single
+	// group ratio (a strict superset: it includes the key's group too).
+	if caps.HasUserGroups {
+		status, body, err := a.jwtGet(ctx, "/api/v1/groups/available")
+		if err == nil && status == 200 {
+			snap.RawPayloads["/api/v1/groups/available"] = body
+			snap.EndpointsUsed = append(snap.EndpointsUsed, "/api/v1/groups/available")
+			var gr groupsAvailableResp
+			if json.Unmarshal(body, &gr) == nil && len(gr.Data) > 0 {
+				out := make(map[string]float64, len(gr.Data))
+				for _, g := range gr.Data {
+					if g.RateMultiplier > 0 {
+						out[g.Name] = g.RateMultiplier
+					}
+				}
+				if len(out) > 0 {
+					snap.GroupRatios = out
+				}
+			}
 		}
 	}
 
 	// Base prices from channels/available (per-model input/output/cache per-token USD).
 	if caps.HasUserChannels {
-		status, body, err := a.doGet(ctx, "/api/v1/channels/available", a.JWT)
+		status, body, err := a.jwtGet(ctx, "/api/v1/channels/available")
 		if err == nil && status == 200 {
 			snap.RawPayloads["/api/v1/channels/available"] = body
 			snap.EndpointsUsed = append(snap.EndpointsUsed, "/api/v1/channels/available")
