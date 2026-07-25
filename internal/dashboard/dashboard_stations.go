@@ -177,6 +177,36 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	// HERO: large group-ratio bar chart.
 	heroChart := groupRatioChart(groupRatios, true)
+	// Balance section: latest reading + trend sparkline (only if the station
+	// exposes a balance source).
+	balanceHTML := ""
+	if bal, err := s.store.LatestBalance(ctx, id); err == nil {
+		balSpark := ""
+		if hist, err := s.store.BalanceHistory(ctx, id, 24); err == nil && len(hist) >= 2 {
+			vals := make([]float64, 0, len(hist))
+			for _, h := range hist {
+				vals = append(vals, h.RemainingUSD)
+			}
+			balSpark = sparklineSVG(vals, 240, 40)
+		}
+		remStr := fmt.Sprintf("$%.2f", bal.RemainingUSD)
+		if bal.Unlimited {
+			remStr = "∞ " + t(lang, "balance.unlimited")
+		}
+		usedStr := fmt.Sprintf("$%.2f", bal.UsedUSD)
+		totalStr := "—"
+		if bal.TotalUSD > 0 {
+			totalStr = fmt.Sprintf("$%.2f", bal.TotalUSD)
+		} else if bal.Unlimited {
+			totalStr = t(lang, "balance.unlimited")
+		}
+		balanceHTML = `<div class="card"><h2>` + t(lang, "section.balance") + `</h2>` +
+			`<div class="spark-grid" style="grid-template-columns:1fr">` +
+			`<div class="spark-cell"><div class="sc-hdr"><span class="sc-name">` + t(lang, "col.remaining") +
+			`</span><span class="sc-val">` + remStr + `</span></div>` + balSpark +
+			`<div class="meta">` + t(lang, "col.used") + `: ` + usedStr + ` · ` + t(lang, "col.total") + `: ` + totalStr +
+			` · ` + t(lang, "col.lastupdate") + `: ` + fmtTime(bal.ObservedAt) + `</div></div></div></div>`
+	}
 	// group-ratio trend sparklines: per group, ratio over recent snapshots.
 	var trendHTML string
 	if hist, _ := s.store.GroupRatioHistory(ctx, id, 24); len(hist) >= 2 {
@@ -261,6 +291,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	body +=
 		heroChart +
+			balanceHTML +
 			trendHTML +
 			`<h2>` + t(lang, "section.groupchanges") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.oldratio"), t(lang, "col.newratio"), t(lang, "col.deltapct"), t(lang, "col.severity")}, groupPage) + gpg +
 			`<details class="sec"><summary>` + t(lang, "expand.models") + ` (` + fmt.Sprintf("%d", len(ratioRows)) + `)</summary>` +

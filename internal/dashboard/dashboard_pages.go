@@ -54,6 +54,15 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(&b, "transitmonitor_probe_markup_pct{station=%q,model=%q} %v\n", st.ID, model, p.MarkupPct)
 		}
 	}
+	b.WriteString("# HELP transitmonitor_balance_remaining_usd Remaining account balance in USD (sub2api wallet / new-api quota → USD)\n")
+	b.WriteString("# TYPE transitmonitor_balance_remaining_usd gauge\n")
+	for _, st := range s.stationsList() {
+		ob, err := s.store.LatestBalance(ctx, st.ID)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "transitmonitor_balance_remaining_usd{station=%q} %v\n", st.ID, ob.RemainingUSD)
+	}
 	if isBrowser {
 		lang := s.lang(w, r)
 		body := `<h1>` + t(lang, "nav.metrics") + `</h1><p class="sub">Prometheus exposition format — scrape at <code>` + r.Host + `/metrics</code></p><div class="card"><pre style="font-size:.8rem;white-space:pre-wrap;overflow-x:auto">` + b.String() + `</pre></div>`
@@ -660,4 +669,90 @@ func truncate(s string, n int) string {
 		return s[:n] + "..."
 	}
 	return s
+}
+
+// balanceHTML renders the per-station balance overview: a table of the latest
+// reading (remaining/used/total USD) plus a sparkline trend per station.
+func (s *Server) balanceHTML(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
+	ctx := r.Context()
+	sts := s.stationsList()
+	type row struct {
+		station, name string
+		ob            domain.BalanceObservation
+		has           bool
+		spark         string
+	}
+	rows := make([]row, 0, len(sts))
+	for _, st := range sts {
+		ob, err := s.store.LatestBalance(ctx, st.ID)
+		if err != nil {
+			rows = append(rows, row{station: st.ID, name: st.Name})
+			continue
+		}
+		spark := ""
+		if hist, err := s.store.BalanceHistory(ctx, st.ID, 24); err == nil && len(hist) >= 2 {
+			vals := make([]float64, 0, len(hist))
+			for _, h := range hist {
+				vals = append(vals, h.RemainingUSD)
+			}
+			spark = sparklineSVG(vals, 120, 32)
+		}
+		rows = append(rows, row{station: st.ID, name: st.Name, ob: ob, has: true, spark: spark})
+	}
+	// Sort: stations with data first, then by remaining USD ascending (lowest on top).
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].has != rows[j].has {
+			return rows[i].has
+		}
+		if !rows[i].has {
+			return rows[i].name < rows[j].name
+		}
+		return rows[i].ob.RemainingUSD < rows[j].ob.RemainingUSD
+	})
+	cells := make([][]string, 0, len(rows))
+	for _, rw := range rows {
+		if !rw.has {
+			cells = append(cells, []string{
+				`<a class="mono" href="/stations/` + esc(rw.station) + `">` + esc(rw.name) + `</a>`,
+				`<span class="gcell p-na">—</span>`, ``, ``, ``, ``, ``,
+			})
+			continue
+		}
+		cls := "b-ok"
+		switch {
+		case rw.ob.Unlimited:
+			cls = "b-ok"
+		case rw.ob.RemainingUSD < 1:
+			cls = "b-crit"
+		case rw.ob.TotalUSD > 0 && rw.ob.RemainingUSD/rw.ob.TotalUSD < 0.2:
+			cls = "b-warn"
+		}
+		remCell := fmt.Sprintf(`<span class="badge-sm %s">$%.2f</span>`, cls, rw.ob.RemainingUSD)
+		if rw.ob.Unlimited {
+			remCell = fmt.Sprintf(`<span class="badge-sm b-ok">∞</span> %s`, t(lang, "balance.unlimited"))
+		}
+		usedCell := fmt.Sprintf(`<span class="num mono">$%.2f</span>`, rw.ob.UsedUSD)
+		totalCell := "—"
+		if rw.ob.TotalUSD > 0 {
+			totalCell = fmt.Sprintf(`<span class="num mono">$%.2f</span>`, rw.ob.TotalUSD)
+		} else if rw.ob.Unlimited {
+			totalCell = t(lang, "balance.unlimited")
+		}
+		cells = append(cells, []string{
+			`<a class="mono" href="/stations/` + esc(rw.station) + `">` + esc(rw.name) + `</a>`,
+			remCell,
+			usedCell,
+			totalCell,
+			`<span class="mono">` + fmtTime(rw.ob.ObservedAt) + `</span>`,
+			`<span class="tag">` + esc(rw.ob.SourceEndpoint) + `</span>`,
+			rw.spark,
+		})
+	}
+	body := `<div class="page-hdr"><h1>` + t(lang, "title.balance") + `</h1><p class="sub">` + t(lang, "sub.balance") + `</p></div>` +
+		renderTable(lang, []string{
+			t(lang, "col.station"), t(lang, "col.remaining"), t(lang, "col.used"),
+			t(lang, "col.total"), t(lang, "col.lastupdate"), "source", t(lang, "balance.trend"),
+		}, cells)
+	writeHTMLShell(w, lang, t(lang, "title.balance"), "balance", body)
 }

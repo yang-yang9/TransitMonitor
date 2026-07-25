@@ -325,6 +325,7 @@ type navItem struct{ H, Label, Key string }
 
 var navItems = []navItem{
 	{"/", "", "overview"},
+	{"/balance", "", "balance"},
 	{"/matrix", "", "matrix"},
 	{"/changes", "", "changes"},
 	{"/probes", "", "probes"},

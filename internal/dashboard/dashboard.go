@@ -40,6 +40,7 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Get("/metrics", s.metricsHandler)
 	r.Get("/readyz", s.readyz)
 	r.Get("/", s.overviewHTML)
+	r.Get("/balance", s.balanceHTML)
 	r.Get("/changes", s.changesHTML)
 	r.Get("/probes", s.probesHTML)
 	r.Get("/matrix", s.matrixHTML)
@@ -52,6 +53,7 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Get("/settings", s.settingsHTML)
 	r.Get("/api/stations", s.stationsJSON)
 	r.Get("/api/ratios", s.ratiosJSON)
+	r.Get("/api/balance", s.balanceJSON)
 	r.Get("/api/changes", s.changesJSON)
 	r.Get("/api/probes", s.probesJSON)
 	r.Get("/api/matrix", s.matrixJSON)
@@ -146,6 +148,34 @@ func (s *Server) ratiosJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, obs)
+}
+
+// balanceJSON returns the latest balance reading per station (one row each).
+func (s *Server) balanceJSON(w http.ResponseWriter, r *http.Request) {
+	obs, err := s.store.LatestBalances(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	type out struct {
+		StationID    string  `json:"station_id"`
+		RemainingUSD float64 `json:"remaining_usd"`
+		UsedUSD      float64 `json:"used_usd"`
+		TotalUSD     float64 `json:"total_usd"`
+		Unlimited    bool    `json:"unlimited"`
+		Currency     string  `json:"currency"`
+		ObservedAt   int64   `json:"observed_at"`
+		Source       string  `json:"source_endpoint"`
+	}
+	res := make([]out, 0, len(obs))
+	for _, b := range obs {
+		res = append(res, out{
+			StationID: b.StationID, RemainingUSD: b.RemainingUSD, UsedUSD: b.UsedUSD,
+			TotalUSD: b.TotalUSD, Unlimited: b.Unlimited, Currency: b.Currency,
+			ObservedAt: b.ObservedAt.Unix(), Source: b.SourceEndpoint,
+		})
+	}
+	writeJSON(w, 200, res)
 }
 
 func (s *Server) changesJSON(w http.ResponseWriter, r *http.Request) {
@@ -289,15 +319,32 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		grpCount := len(grs)
+		// Balance KPI (if the station exposes one). Low balance → red.
+		balStr := ""
+		if bal, err := s.store.LatestBalance(ctx, st.ID); err == nil {
+			cls := "b-ok"
+			if !bal.Unlimited && bal.RemainingUSD < 1 {
+				cls = "b-crit"
+			} else if !bal.Unlimited && bal.TotalUSD > 0 && bal.RemainingUSD/bal.TotalUSD < 0.2 {
+				cls = "b-warn"
+			}
+			val := fmt.Sprintf("$%.2f", bal.RemainingUSD)
+			if bal.Unlimited {
+				val = t(lang, "balance.unlimited")
+			}
+			balStr = fmt.Sprintf(`<div class="kpi-label">`+t(lang, "col.balance")+`</div><div class="kpi"><span class="badge-sm %s">%s</span></div>`, cls, val)
+		}
 		b.WriteString(fmt.Sprintf(
 			`<a class="card stcard" href="/stations/%s">`+
 				`<div class="st-hdr"><span class="st-name">%s</span><span class="dot-s %s"></span></div>`+
+				`%s`+
 				`%s`+
 				`%s`+
 				`<div class="meta">`+
 				`<span class="tag tag-pri">%s</span> <span class="tag">%s</span> · `+
 				`%d %s · %s: %s</div></a>`,
 			esc(st.ID), esc(name), dot,
+			balStr,
 			chart,
 			changeHint,
 			esc(string(st.Kind)), esc(st.BaseURL),
