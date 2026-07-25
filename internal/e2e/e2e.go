@@ -90,7 +90,7 @@ func mockSub2API(s *mockState) *httptest.Server {
 		_, _, _, in, out := s.snapshot()
 		fmt.Fprintf(w, `{"success":true,"data":[{"name":"c1","platforms":[{"platform":"anthropic","supported_models":[{"name":"gpt-4o-mini","pricing":{"input_price":%v,"output_price":%v}}]}]}]}`, in, out)
 	})
-	mux.HandleFunc("/auth/login", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(405)
 			return
@@ -109,7 +109,7 @@ func mockSub2API(s *mockState) *httptest.Server {
 		}
 		token := makeMockJWT(time.Now().Add(24 * time.Hour).Unix())
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"token":"%s"}`, token)
+		fmt.Fprintf(w, `{"code":0,"message":"success","data":{"access_token":"%s","token_type":"Bearer"}}`, token)
 	})
 	return httptest.NewServer(mux)
 }

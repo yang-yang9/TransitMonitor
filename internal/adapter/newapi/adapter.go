@@ -165,9 +165,9 @@ func endpoint(path string, status int, err error, at time.Time) domain.EndpointS
 // endpoint_auth_failed alerts; other statuses are plain errors.
 func authStatusErr(src string, status int) error {
 	if status == 401 || status == 403 {
-		return fmt.Errorf("%s: status %d: %w", src, status, domain.ErrAuthFailed)
+		return fmt.Errorf("倍率源 %s 返回 HTTP %d（鉴权失败）: %w", src, status, domain.ErrAuthFailed)
 	}
-	return fmt.Errorf("%s: status %d", src, status)
+	return fmt.Errorf("倍率源 %s 返回 HTTP %d", src, status)
 }
 
 // ProbeCapabilities discovers which endpoints/auth succeed.
@@ -321,7 +321,7 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 		data.Models = a.modelsFromMaps(rc)
 	default:
 		// No ratio source at all (e.g. pricing auth-gated + ratio_config off).
-		return snap, nil, fmt.Errorf("no ratio source available for station %s", a.StationID)
+		return snap, nil, fmt.Errorf("站点 %s 无可用倍率源（/api/pricing 与 /api/ratio_config 均不可用；请检查凭据/网络，或确认站是否开启 ExposeRatioEnabled）", a.StationID)
 	}
 	snap.EndpointsUsed = []string{src}
 
@@ -366,28 +366,29 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 	// module public, or a PAT that satisfies its UserAuth gate) or /v1/models
 	// (sk- key). Point the operator at the fix instead of silently ingesting junk.
 	if src != "/api/pricing" && !enabledFilterApplied {
-		reason := "no api_key is configured"
+		reason := "未配置 api_key"
 		switch {
 		case a.APIKey != "":
-			reason = "/v1/models is unavailable for the configured api_key (key invalid or endpoint gated)"
+			reason = "当前 api_key 无法访问 /v1/models（key 无效或端点被站限制）"
 		case a.PAT == "" && a.APIKey == "":
 			// No creds at all — almost always an encKey mismatch (stored creds
 			// failed to decrypt and Auth loaded empty), not a station genuinely
 			// configured credential-free. Name the real cause so the operator
 			// fixes the key instead of re-entering creds that are already there.
-			reason = "no credentials loaded — the station's encrypted creds failed to decrypt (TRANSMONITOR_ENCRYPTION_KEY mismatch) or were never entered; verify the key matches the one used when the station was added, or re-enter its credentials"
+			reason = "凭据未加载 — 站点的加密凭据解密失败（TRANSMONITOR_ENCRYPTION_KEY 不匹配）或从未录入；请确认 key 与加站时一致，或重新录入凭据"
 		default:
 			// A PAT is present but /api/pricing still gated (401) and no api_key:
 			// the PAT alone was insufficient. Say so, instead of the generic
 			// "no api_key" that implies the operator configured nothing.
-			reason = "no api_key is configured (the configured PAT did not unlock /api/pricing, and only a sk- key can drive /v1/models filtering)"
+			reason = "未配置 api_key（已配置的 PAT 未能解锁 /api/pricing，只有 sk- key 能驱动 /v1/models 过滤）"
 		}
 		return snap, nil, fmt.Errorf(
-			"ratio source %s exposes %d configured models (including new-api's built-in default ratio map), "+
-				"which is not the set of models this station actually serves; cannot determine the enabled set (%s). "+
-				"Provide a PAT (system access token — unlocks /api/pricing, which returns only enabled-channel models) "+
-				"or a valid api_key (sk- key — enables /v1/models filtering), or set pricing.requireAuth=false on "+
-				"station %s. No observations recorded until then.",
+			"倍率源 %s 暴露了 %d 个已配置模型（含 new-api 内置默认倍率表 built-in default，多数并非本站实际启用），"+
+				"无法确定本站实际启用的模型集（%s）。"+
+				"修复（任选其一）：在本站配置填 PAT（new-api 系统访问令牌 — 解锁 /api/pricing，仅返回已启用渠道的模型）；"+
+				"或填有效的 api_key（sk- key — 启用 /v1/models 过滤）；"+
+				"或在 new-api 站自己的后台设 pricing.requireAuth=false（站点 %s — 让 /api/pricing 公开，无需 PAT）。"+
+				"在此之前不记录观测。",
 			src, len(data.Models), reason, a.StationID)
 	}
 

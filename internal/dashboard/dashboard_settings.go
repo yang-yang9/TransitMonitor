@@ -19,7 +19,9 @@ func (s *Server) settingsHTML(w http.ResponseWriter, r *http.Request) {
 
 	// Defaults from the live (merged, secrets-redacted) notifier config.
 	var nc alert.NotifierConfig
-	if m, ok := s.mgr.(interface{ NotifierConfigs(context.Context) alert.NotifierConfig }); ok {
+	if m, ok := s.mgr.(interface {
+		NotifierConfigs(context.Context) alert.NotifierConfig
+	}); ok {
 		nc = m.NotifierConfigs(r.Context())
 	}
 	// Read-only display values for the (redacted) secret fields' placeholders.
@@ -111,7 +113,7 @@ function tmSettingsTest(kind){
 // pre-escape interpolated values with esc()).
 type pageBuilder struct{ buf []byte }
 
-func (b *pageBuilder) w(s string) { b.buf = append(b.buf, s...) }
+func (b *pageBuilder) w(s string)     { b.buf = append(b.buf, s...) }
 func (b *pageBuilder) String() string { return string(b.buf) }
 
 // jsQuote returns a JS-single-quoted-string literal for s (for inline scripts).
@@ -147,7 +149,9 @@ func (s *Server) settingsSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	saver, ok := s.mgr.(interface{ SaveNotifierConfig(context.Context, alert.NotifierConfig) error })
+	saver, ok := s.mgr.(interface {
+		SaveNotifierConfig(context.Context, alert.NotifierConfig) error
+	})
 	if !ok {
 		http.Error(w, t(s.lang(w, r), "settings.no.manager"), http.StatusServiceUnavailable)
 		return
@@ -165,9 +169,13 @@ func (s *Server) settingsTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": t(lang, "settings.no.manager")})
 		return
 	}
-	var in struct{ Kind string `json:"kind"` }
+	var in struct {
+		Kind string `json:"kind"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
-	tester, ok := s.mgr.(interface{ SendTestAlert(context.Context, string) error })
+	tester, ok := s.mgr.(interface {
+		SendTestAlert(context.Context, string) error
+	})
 	if !ok {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": t(lang, "settings.no.manager")})
 		return

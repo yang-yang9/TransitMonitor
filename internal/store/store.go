@@ -414,6 +414,7 @@ func (s *Store) ListStationsDB(ctx context.Context, encKey []byte) ([]domain.Sta
 				// the operator only learns about it via a misleading "no api_key"
 				// refusal from the adapter, hiding the real cause.
 				if pt, derr := secrets.Decrypt(encKey, ct, nonce); derr != nil {
+					st.DecryptFailed = true
 					fails = append(fails, StationLoadFailure{StationID: id, Reason: "decrypt_failed", Err: derr})
 				} else {
 					_ = yaml.Unmarshal(pt, &st.Auth)
@@ -592,6 +593,88 @@ func (s *Store) GetCredentials(ctx context.Context, stationID string, key []byte
 		return "", err
 	}
 	return string(pt), nil
+}
+
+// RotationResult reports the outcome of a key rotation pass.
+type RotationResult struct {
+	StationsRotated   int
+	NotifiersRotated  int
+	FailedStationIDs  []string // could not decrypt with oldKey (wrong key / corruption)
+	FailedNotifierIDs []string
+}
+
+// RotateKey re-encrypts every encrypted blob from oldKey to newKey across both
+// the credentials and notifier_config tables. Rows that fail to decrypt with
+// oldKey are skipped and listed in the result (so the operator can re-enter
+// those credentials); the rotation proceeds for the rest. Use via
+// `transitmonitor -rotate-key -old-key <K> -new-key <K2>`.
+func (s *Store) RotateKey(ctx context.Context, oldKey, newKey []byte) (RotationResult, error) {
+	var res RotationResult
+
+	// credentials table (per-station AuthConfig YAML).
+	rows, err := s.db.QueryContext(ctx, "SELECT station_id, ciphertext, nonce FROM credentials")
+	if err != nil {
+		return res, err
+	}
+	for rows.Next() {
+		var id string
+		var ct, nonce []byte
+		if err := rows.Scan(&id, &ct, &nonce); err != nil {
+			rows.Close()
+			return res, err
+		}
+		pt, derr := secrets.Decrypt(oldKey, ct, nonce)
+		if derr != nil {
+			res.FailedStationIDs = append(res.FailedStationIDs, id)
+			continue
+		}
+		nct, nnonce, err := secrets.Encrypt(newKey, pt)
+		if err != nil {
+			rows.Close()
+			return res, fmt.Errorf("re-encrypt station %s: %w", id, err)
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE credentials SET ciphertext=?, nonce=?, updated_at=CURRENT_TIMESTAMP WHERE station_id=?`,
+			nct, nnonce, id); err != nil {
+			rows.Close()
+			return res, err
+		}
+		res.StationsRotated++
+	}
+	rows.Close()
+
+	// notifier_config table (DingTalk/webhook secrets, etc.).
+	nrows, err := s.db.QueryContext(ctx, "SELECT id, ciphertext, nonce FROM notifier_config")
+	if err != nil {
+		return res, err
+	}
+	for nrows.Next() {
+		var id string
+		var ct, nonce []byte
+		if err := nrows.Scan(&id, &ct, &nonce); err != nil {
+			nrows.Close()
+			return res, err
+		}
+		pt, derr := secrets.Decrypt(oldKey, ct, nonce)
+		if derr != nil {
+			res.FailedNotifierIDs = append(res.FailedNotifierIDs, id)
+			continue
+		}
+		nct, nnonce, err := secrets.Encrypt(newKey, pt)
+		if err != nil {
+			nrows.Close()
+			return res, fmt.Errorf("re-encrypt notifier %s: %w", id, err)
+		}
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE notifier_config SET ciphertext=?, nonce=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+			nct, nnonce, id); err != nil {
+			nrows.Close()
+			return res, err
+		}
+		res.NotifiersRotated++
+	}
+	nrows.Close()
+	return res, nil
 }
 
 // NotifierConfigID is the single row key used for the encrypted notifier blob.

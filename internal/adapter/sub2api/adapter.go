@@ -133,10 +133,10 @@ func endpoint(path string, status int, err error, at time.Time) domain.EndpointS
 // domain.ErrAuthFailed when any probed authenticated endpoint returned 401/403
 // (so the scheduler can emit endpoint_auth_failed alerts for sub2api too).
 func noRatioSourceErr(stationID string, caps domain.CapabilityReport) error {
-	base := fmt.Errorf("no ratio source available for station %s", stationID)
+	base := fmt.Errorf("站点 %s 无可用倍率源（无 sk-key/JWT，或 billing 不可用）", stationID)
 	for _, e := range caps.Endpoints {
 		if e.HTTPStatus == 401 || e.HTTPStatus == 403 {
-			return fmt.Errorf("%w: %s returned %d: %w", base, e.Path, e.HTTPStatus, domain.ErrAuthFailed)
+			return fmt.Errorf("%w：端点 %s 返回 %d（鉴权失败）: %w", base, e.Path, e.HTTPStatus, domain.ErrAuthFailed)
 		}
 	}
 	return base

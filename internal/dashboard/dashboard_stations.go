@@ -35,6 +35,17 @@ func (s *Server) stationsList() []domain.Station {
 	return s.stations
 }
 
+// decryptFailedCount returns how many stations loaded with undecryptable creds.
+func (s *Server) decryptFailedCount() int {
+	n := 0
+	for _, st := range s.stationsList() {
+		if st.DecryptFailed {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Server) findStation(id string) (domain.Station, bool) {
 	for _, st := range s.stationsList() {
 		if st.ID == id {
@@ -54,10 +65,14 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 		if !st.Enabled {
 			enabled = `<span class="badge b-muted">—</span>`
 		}
+		nameCell := esc(st.Name)
+		if st.DecryptFailed {
+			nameCell = `<a href="/stations/` + esc(st.ID) + `/edit">` + esc(st.Name) + `</a> <span class="badge b-crit" title="` + esc(t(lang, "badge.decrypt_failed")) + `">⚠ ` + esc(t(lang, "badge.decrypt_failed")) + `</span>`
+		}
 		edit := `<a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a> <button class="btn btn-outline btn-sm" onclick="fetch('/api/stations/` + esc(st.ID) + `/poll',{method:'POST'}).then(function(){location.reload();})">🔄 ` + t(lang, "form.poll") + `</button>`
 		del := `<button class="btn btn-danger btn-sm" onclick="tmDel('` + esc(st.ID) + `')">` + t(lang, "form.delete") + `</button>`
 		rows = append(rows, []string{
-			`<span class="mono">` + esc(st.ID) + `</span>`, esc(st.Name),
+			`<span class="mono">` + esc(st.ID) + `</span>`, nameCell,
 			`<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span>`,
 			`<span class="mono" style="font-size:.8rem">` + esc(st.BaseURL) + `</span>`, enabled,
 			`<div style="display:flex;gap:.4rem">` + edit + ` ` + del + `</div>`,
@@ -239,16 +254,21 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 	info := `<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span> ` + esc(st.BaseURL) +
 		` <span class="badge b-warn">⚠ ` + uptime + `</span>` +
 		` <a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a>`
-	body := `<div class="page-hdr"><h1>` + esc(st.Name) + `</h1><p class="sub">` + info + `</p></div>` +
+	body := `<div class="page-hdr"><h1>` + esc(st.Name) + `</h1><p class="sub">` + info + `</p></div>`
+	if st.DecryptFailed {
+		body += `<div class="card" style="border-left:3px solid var(--crit,#ef4444);background:var(--bg-2)"><span class="badge b-crit">⚠</span> ` +
+			esc(t(lang, "badge.decrypt_failed")) + ` — <a href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a></div>`
+	}
+	body +=
 		heroChart +
-		trendHTML +
-		`<h2>` + t(lang, "section.groupchanges") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.oldratio"), t(lang, "col.newratio"), t(lang, "col.deltapct"), t(lang, "col.severity")}, groupPage) + gpg +
-		`<details class="sec"><summary>` + t(lang, "expand.models") + ` (` + fmt.Sprintf("%d", len(ratioRows)) + `)</summary>` +
-		renderRatioTable([]string{t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.modelratio"), t(lang, "col.completionratio"), t(lang, "col.groupratio"), t(lang, "col.effratio"), t(lang, "col.status")}, ratioRows) + `</details>` +
-		`<details class="sec"><summary>` + t(lang, "expand.modelchanges") + ` (` + fmt.Sprintf("%d", len(modelChangeRows)) + `)</summary>` +
-		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, modelPage) + mpg + `</details>` +
-		`<details class="sec"><summary>` + t(lang, "expand.probes") + ` (` + fmt.Sprintf("%d", len(probeRows)) + `)</summary>` +
-		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probePage) + ppg + `</details>`
+			trendHTML +
+			`<h2>` + t(lang, "section.groupchanges") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.oldratio"), t(lang, "col.newratio"), t(lang, "col.deltapct"), t(lang, "col.severity")}, groupPage) + gpg +
+			`<details class="sec"><summary>` + t(lang, "expand.models") + ` (` + fmt.Sprintf("%d", len(ratioRows)) + `)</summary>` +
+			renderRatioTable([]string{t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.modelratio"), t(lang, "col.completionratio"), t(lang, "col.groupratio"), t(lang, "col.effratio"), t(lang, "col.status")}, ratioRows) + `</details>` +
+			`<details class="sec"><summary>` + t(lang, "expand.modelchanges") + ` (` + fmt.Sprintf("%d", len(modelChangeRows)) + `)</summary>` +
+			renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, modelPage) + mpg + `</details>` +
+			`<details class="sec"><summary>` + t(lang, "expand.probes") + ` (` + fmt.Sprintf("%d", len(probeRows)) + `)</summary>` +
+			renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probePage) + ppg + `</details>`
 	writeHTMLShell(w, lang, esc(st.Name), "stations", body)
 }
 
@@ -584,35 +604,39 @@ func (s *Server) stationsPoll(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/stations/{id}/login — auto-login to sub2api and obtain a fresh JWT.
+// Always returns 200 with a JSON body ({error} on failure, {message} on success)
+// because the external ingress proxy replaces 5xx with its own HTML page,
+// which would break the browser's r.json() in tmFetchJWT.
 func (s *Server) stationsLogin(w http.ResponseWriter, r *http.Request) {
 	if s.mgr == nil {
-		http.Error(w, "station manager not configured", http.StatusServiceUnavailable)
+		writeJSON(w, 200, map[string]string{"error": "station manager not configured"})
 		return
 	}
 	id := chi.URLParam(r, "id")
 	st, ok := s.findStation(id)
 	if !ok {
-		writeJSON(w, 404, map[string]string{"error": "station not found"})
+		writeJSON(w, 200, map[string]string{"error": "station not found"})
 		return
 	}
 	if st.Kind != domain.KindSub2API {
-		writeJSON(w, 400, map[string]string{"error": "JWT login only supported for sub2api stations"})
+		writeJSON(w, 200, map[string]string{"error": "JWT 登录仅支持 sub2api 站点"})
 		return
 	}
+	lang := s.lang(w, r)
 	if st.Auth.AdminEmail == "" || st.Auth.AdminPass == "" {
-		writeJSON(w, 400, map[string]string{"error": t("en", "form.jwt.nocred")})
+		writeJSON(w, 200, map[string]string{"error": t(lang, "form.jwt.nocred")})
 		return
 	}
 	token, exp, err := jwtlogin.Login(r.Context(), st.BaseURL, st.Auth.AdminEmail, st.Auth.AdminPass, nil)
 	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		writeJSON(w, 200, map[string]string{"error": err.Error()})
 		return
 	}
 	st.Auth.JWT = token
 	if err := s.mgr.AddStation(st); err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		writeJSON(w, 200, map[string]string{"error": err.Error()})
 		return
 	}
-	msg := fmt.Sprintf("JWT obtained, expires %s", exp.Format("2006-01-02 15:04:05"))
-	writeJSON(w, 200, map[string]string{"status": "ok", "message": msg, "expires_at": exp.Format(time.RFC3339)})
+	msg := fmt.Sprintf(t(lang, "form.jwt.ok"), exp.Format("2006-01-02 15:04:05"))
+	writeJSON(w, 200, map[string]string{"message": msg, "expires_at": exp.Format(time.RFC3339)})
 }

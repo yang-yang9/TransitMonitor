@@ -56,6 +56,9 @@ Or `docker compose up -d --build` (uses `docker-compose.yml`). Multi-arch (amd64
 - `unconfigured-37.5` → new-api self-use, not a real price.
 - `cost-guardrail-exceeded` → raise `probe.max_cost_cents_per_run` or lower tokens.
 - Probe first with `dry_run: true`.
+- **Red "creds decrypt failed" badge / `creds.decrypt_failed` audit** → the running `TRANSMONITOR_ENCRYPTION_KEY` ≠ the key used when the station was added. Fix: re-enter the station's credentials via the web UI (re-encrypts with the current key), or restart with the original key. Rotate to a new key without losing creds: `./transitmonitor -rotate-key -old-key <old> -new-key <new>`.
+
+⚠ `TRANSMONITOR_ENCRYPTION_KEY` is a **root secret** — persist it (compose env / `.env` / secret manager) and back it up with the DB. Losing it = stored credentials unreadable forever.
 
 ## Full reference
 `docs/usage.md` (manual), `docs/design.md` (architecture), `docs/upstream-contract.md` (endpoint/field cheatsheet), `openspec/changes/add-ratio-monitor-core/specs/` (SDD specs with WHEN/THEN scenarios).

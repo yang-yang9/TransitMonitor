@@ -116,14 +116,14 @@ func newFailSched(t *testing.T, fa *failAdapter, rules []alert.Rule) (*Scheduler
 	sink := &alert.SinkNotifier{}
 	var tick int
 	sched := &Scheduler{
-		Adapters:    map[string]adapter.Adapter{"s1": fa},
-		Store:       st,
-		Rules:       rules,
-		Notifier:    sink,
-		DiffCfg:     changedet.DefaultConfig(),
-		lastAlert:   map[string]time.Time{},
-		failStreak:  map[string]int{},
-		authOK:      map[string]bool{},
+		Adapters:   map[string]adapter.Adapter{"s1": fa},
+		Store:      st,
+		Rules:      rules,
+		Notifier:   sink,
+		DiffCfg:    changedet.DefaultConfig(),
+		lastAlert:  map[string]time.Time{},
+		failStreak: map[string]int{},
+		authOK:     map[string]bool{},
 		Now: func() time.Time {
 			tick++
 			return time.Date(2026, 7, 21, 12, tick, 0, 0, time.UTC)

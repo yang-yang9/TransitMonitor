@@ -31,7 +31,7 @@ func TestLogin_Success(t *testing.T) {
 	token := makeJWT(exp)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/auth/login" {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/auth/login" {
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
 		}
 		var req struct {
@@ -46,7 +46,12 @@ func TestLogin_Success(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"token": token})
+		// sub2api standard envelope: {code,message,data:{access_token}}
+		json.NewEncoder(w).Encode(map[string]any{
+			"code":    0,
+			"message": "success",
+			"data":    map[string]string{"access_token": token, "token_type": "Bearer"},
+		})
 	}))
 	defer srv.Close()
 
@@ -59,6 +64,24 @@ func TestLogin_Success(t *testing.T) {
 	}
 	if gotExp.Unix() != exp {
 		t.Fatalf("exp mismatch: got %v, want %v", gotExp.Unix(), exp)
+	}
+}
+
+func TestLogin_FlatShapeFallback(t *testing.T) {
+	// A fork that returns a flat {token:...} (no envelope) should still parse.
+	exp := time.Now().Add(time.Hour).Unix()
+	token := makeJWT(exp)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"token": token})
+	}))
+	defer srv.Close()
+	got, _, err := Login(context.Background(), srv.URL, "a@b.com", "p", srv.Client())
+	if err != nil {
+		t.Fatalf("Login flat-shape: %v", err)
+	}
+	if got != token {
+		t.Fatalf("token mismatch: got %q", got)
 	}
 }
 

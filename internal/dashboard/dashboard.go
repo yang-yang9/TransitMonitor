@@ -246,6 +246,13 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	b.WriteString(`<div class="page-hdr"><h1>` + t(lang, "title.overview") + `</h1><p class="sub">` + t(lang, "sub.overview") +
 		`<a class="btn" href="/matrix">` + t(lang, "btn.matrix") + `</a></p></div>`)
+	// Surface credential-decrypt failures loudly: otherwise the operator only
+	// sees misleading downstream "no api_key" poll errors and chases the wrong fix.
+	if df := s.decryptFailedCount(); df > 0 {
+		b.WriteString(`<div class="card" style="border-left:3px solid var(--crit,#ef4444);background:var(--bg-2)"><span class="badge b-crit">⚠</span> ` +
+			fmt.Sprintf(t(lang, "banner.decrypt_failed"), df) +
+			` <a class="btn btn-sm btn-outline" href="/stations">` + t(lang, "title.stations") + `</a></div>`)
+	}
 	b.WriteString(`<h2>` + t(lang, "section.stations") + `</h2><div class="grid">`)
 	for _, st := range s.stationsList() {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)

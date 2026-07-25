@@ -80,6 +80,13 @@ type Station struct {
 	Probe        ProbeConfig `yaml:"probe" json:"probe"`
 	Tags         []string    `yaml:"tags" json:"tags"`
 	Enabled      bool        `yaml:"enabled" json:"enabled"`
+
+	// DecryptFailed marks a station whose encrypted credentials could not be
+	// decrypted at load time (TRANSMONITOR_ENCRYPTION_KEY mismatch). Transient:
+	// not persisted (json/yaml:"-"), cleared on re-save via the web UI. Surfaced
+	// in the dashboard as a red badge so the operator re-enters credentials
+	// instead of chasing a misleading downstream "no api_key" error.
+	DecryptFailed bool `yaml:"-" json:"-"`
 }
 
 // Duration is a time.Duration that (un)marshals from YAML as a Go duration string (e.g. "3m").

@@ -5,6 +5,7 @@
 //	transitmonitor -selftest                   # in-process E2E self-test (mock stations)
 //	transitmonitor -config config.yaml -once   # one scrape per station, print, exit
 //	transitmonitor -config config.yaml         # serve dashboard + poll loop until Ctrl-C
+//	transitmonitor -rotate-key -old-key K -new-key K2  # re-encrypt stored creds to a new key, then exit
 //	transitmonitor -version
 //
 // Stations come from YAML (authoritative, in-memory) + DB-persisted web-added
@@ -20,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata" // embed the IANA tzdb so time.LoadLocation works in slim containers (Alpine has no zoneinfo)
@@ -47,12 +49,18 @@ func main() {
 		selftest   bool
 		addr       string
 		showVer    bool
+		rotateKey  bool
+		oldKey     string
+		newKey     string
 	)
 	flag.StringVar(&configPath, "config", envOr("TRANSMONITOR_CONFIG", "config.yaml"), "config file path")
 	flag.BoolVar(&once, "once", false, "poll each station once and exit")
 	flag.BoolVar(&selftest, "selftest", false, "run in-process end-to-end self-test (mock stations) and exit")
 	flag.StringVar(&addr, "addr", "", "dashboard listen address (overrides config/env)")
 	flag.BoolVar(&showVer, "version", false, "print version and exit")
+	flag.BoolVar(&rotateKey, "rotate-key", false, "re-encrypt all stored credentials from -old-key to -new-key, then exit")
+	flag.StringVar(&oldKey, "old-key", "", "current encryption key (for -rotate-key)")
+	flag.StringVar(&newKey, "new-key", "", "new encryption key (for -rotate-key; defaults to TRANSMONITOR_ENCRYPTION_KEY)")
 	flag.Parse()
 
 	if showVer {
@@ -86,6 +94,38 @@ func main() {
 		fatal(logger, "open store: %v", err)
 	}
 	defer st.Close()
+
+	// Key rotation: re-encrypt every stored credential from oldKey → newKey,
+	// then exit. Used when rotating TRANSMONITOR_ENCRYPTION_KEY without losing
+	// existing credentials. newKey defaults to TRANSMONITOR_ENCRYPTION_KEY.
+	if rotateKey {
+		if oldKey == "" {
+			fatal(logger, "-rotate-key requires -old-key (the current TRANSMONITOR_ENCRYPTION_KEY)")
+		}
+		nk := newKey
+		if nk == "" {
+			nk = os.Getenv("TRANSMONITOR_ENCRYPTION_KEY")
+		}
+		if nk == "" {
+			fatal(logger, "-rotate-key requires -new-key (or set TRANSMONITOR_ENCRYPTION_KEY)")
+		}
+		res, err := st.RotateKey(context.Background(), secrets.DeriveKey(oldKey), secrets.DeriveKey(nk))
+		if err != nil {
+			fatal(logger, "rotate key: %v", err)
+		}
+		logger.Info("key rotation complete",
+			"stations_rotated", res.StationsRotated, "notifiers_rotated", res.NotifiersRotated,
+			"failed_stations", res.FailedStationIDs, "failed_notifiers", res.FailedNotifierIDs)
+		fmt.Printf("rotation complete: %d stations, %d notifiers re-encrypted.\n", res.StationsRotated, res.NotifiersRotated)
+		if len(res.FailedStationIDs) > 0 || len(res.FailedNotifierIDs) > 0 {
+			fmt.Printf("WARNING: %d station(s) and %d notifier(s) could not be decrypted with -old-key (wrong key or corruption) and were skipped — re-enter those credentials via the web UI.\n",
+				len(res.FailedStationIDs), len(res.FailedNotifierIDs))
+			fmt.Println("  failed stations:", strings.Join(res.FailedStationIDs, ", "))
+			fmt.Println("  failed notifiers:", strings.Join(res.FailedNotifierIDs, ", "))
+		}
+		fmt.Println("\nRestart TransitMonitor with TRANSMONITOR_ENCRYPTION_KEY=<new key> to load the re-encrypted credentials.")
+		return
+	}
 
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	encKey := deriveKeyFromEnv()

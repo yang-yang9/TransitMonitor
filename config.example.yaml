@@ -3,6 +3,17 @@
 # Run: ./transitmonitor -config config.yaml           # serve + poll loop
 #       ./transitmonitor -config config.yaml -once     # one scrape, print, exit
 #       ./transitmonitor -selftest                     # in-process self-test (no real station)
+#
+# ⚠ ROOT SECRET — TRANSMONITOR_ENCRYPTION_KEY:
+# Set this env var to encrypt credentials (API keys, JWTs, notifier secrets) at
+# rest in the DB. It is a ROOT SECRET: treat it like a password — persist it in
+# docker-compose `environment`, a `.env` file (not committed), or a secret
+# manager, and back it up alongside the DB. LOSING IT = stored credentials become
+# unreadable forever (no recovery). Stations added via the web UI are encrypted
+# with the key in effect at add time; restarting with a different/missing key
+# loads them with empty credentials (surfaced as a red "creds decrypt failed"
+# badge) until you re-enter credentials or restart with the original key.
+# Rotate with: ./transitmonitor -rotate-key -old-key <old> -new-key <new>
 
 db:
   path: transitmonitor.db

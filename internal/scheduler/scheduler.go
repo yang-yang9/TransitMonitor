@@ -48,9 +48,9 @@ type Scheduler struct {
 	lastAlert             map[string]time.Time
 	alertMu               sync.Mutex
 
-	failMu      sync.Mutex
-	failStreak  map[string]int  // consecutive poll failures per station
-	authOK      map[string]bool // last known auth state per station (true = OK)
+	failMu     sync.Mutex
+	failStreak map[string]int  // consecutive poll failures per station
+	authOK     map[string]bool // last known auth state per station (true = OK)
 }
 
 // New constructs a scheduler with defaults.
@@ -207,7 +207,7 @@ func (s *Scheduler) Stations() []domain.Station {
 // Implements dashboard.StationManager.
 func (s *Scheduler) AddStation(st domain.Station) error {
 	if s.runCtx == nil {
-		return fmt.Errorf("scheduler not running")
+		return fmt.Errorf("调度器未运行")
 	}
 	client := s.Client
 	if client == nil {
@@ -247,7 +247,7 @@ func (s *Scheduler) AddStation(st domain.Station) error {
 // Implements dashboard.StationManager.
 func (s *Scheduler) RemoveStation(id string) error {
 	if s.runCtx == nil {
-		return fmt.Errorf("scheduler not running")
+		return fmt.Errorf("调度器未运行")
 	}
 	s.mu.Lock()
 	if cancel, ok := s.cancels[id]; ok {
@@ -283,7 +283,7 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 	}
 	s.mu.Unlock()
 	if a == nil {
-		return fmt.Errorf("unknown station %s", stationID)
+		return fmt.Errorf("未知站点 %s", stationID)
 	}
 	s.maybeRefreshJWT(ctx, &stn, a)
 	prev, err := s.Store.PrevPollObservations(ctx, stationID)
@@ -293,12 +293,12 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 	caps, err := a.ProbeCapabilities(ctx)
 	if err != nil {
 		s.recordPollFailure(ctx, stationID, err)
-		return fmt.Errorf("probe capabilities: %w", err)
+		return fmt.Errorf("探测能力失败: %w", err)
 	}
 	snap, obs, err := a.FetchRatios(ctx, caps)
 	if err != nil {
 		s.recordPollFailure(ctx, stationID, err)
-		return fmt.Errorf("fetch ratios: %w", err)
+		return fmt.Errorf("抓取倍率失败: %w", err)
 	}
 	s.recordPollSuccess(stationID)
 	t := s.Now()

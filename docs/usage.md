@@ -154,12 +154,19 @@ SQLite 单文件 `transitmonitor.db`（+ `-wal`/`-shm`）。停服后复制即�
 - 凭据 `AuthConfig` 字段 `json:"-"`，dashboard 响应/日志经 `secrets.Redact` 掩码（`sk-***`）。
 - 设 `TRANSMONITOR_ENCRYPTION_KEY` 后，启动时各站凭据 AES-GCM 加密写入 `credentials` 表（明文不入库）。
 - 抓取只读 GET；唯一写站动作 = 真实成本探测（受护栏、可干跑、可停、去重）。
+- ⚠ `TRANSMONITOR_ENCRYPTION_KEY` 是**根密钥**：必须和 DB 一起持久化（compose `environment` / `.env`（不入库）/ secret manager）并备份。**丢失它 = 已存凭据永久不可恢复**。Web UI 加的站用当时生效的 key 加密；重启时 key 不一致，站会以空凭据加载，dashboard 标红「凭据解密失败」徽标，需到站点管理页重新录入凭据（用当前 key 重新加密）。轮换 key 不丢凭据：
+  ```bash
+  ./transitmonitor -rotate-key -old-key <旧key> -new-key <新key>
+  # 或 -new-key 留空，默认取 TRANSMONITOR_ENCRYPTION_KEY
+  ```
+  完成后用新 key 重启即可。
 
 ## 12. 排查
 - 日志：slog JSON → stderr（Docker `docker compose logs -f`）。`TRANSMONITOR_LOG_LEVEL=debug` 看详情。
 - `-selftest` 失败 → 读报错（自测覆盖全链路）。
 - 站抓不到 → `/api/audit` 看探测记录；日志看 `poll` 错误。常见：
   - `no ratio source available`：new-api pricing 鉴权失败 + ratio_config 关；或 sub2api 无 sk-key/JWT。检查凭据/网络。
+  - 站点列表/详情页红色「凭据解密失败」徽标 / 审计 `creds.decrypt_failed` → 当前 `TRANSMONITOR_ENCRYPTION_KEY` 与加站时不一致。重新录入凭据或用原 key 重启。
   - `declared-unavailable (simple mode)`：sub2api simple 模式，billing 不可用。
   - `unconfigured-37.5`：new-api self-use 模式下未配置模型，非真实价。
   - `cost-guardrail-exceeded`：探测预估成本超 `max_cost_cents_per_run`。

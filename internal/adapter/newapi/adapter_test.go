@@ -327,8 +327,8 @@ func TestFetchRatios_RatioConfigUnfiltered(t *testing.T) {
 	}
 	// No PAT and no api_key = no creds at all (the real-world encKey-mismatch
 	// shape). Guidance must name the actual cause, not just "no api_key".
-	if !strings.Contains(msg, "decrypt") {
-		t.Errorf("with no creds at all, error should mention decrypt/ENCRYPTION_KEY (got: %s)", msg)
+	if !strings.Contains(msg, "解密") {
+		t.Errorf("with no creds at all, error should mention 解密/ENCRYPTION_KEY (got: %s)", msg)
 	}
 	_ = snap // RawSnapshot is discarded by the scheduler on FetchRatios error
 }
@@ -349,8 +349,8 @@ func TestFetchRatios_RatioConfigUnfiltered_PATButNoAPIKey(t *testing.T) {
 		t.Fatal("expected a refusal error")
 	}
 	msg := err.Error()
-	if strings.Contains(msg, "no credentials loaded") {
-		t.Errorf("PAT is configured; should not say 'no credentials loaded': %s", msg)
+	if strings.Contains(msg, "凭据未加载") {
+		t.Errorf("PAT is configured; should not say '凭据未加载' (no creds): %s", msg)
 	}
 	if !strings.Contains(msg, "PAT") || !strings.Contains(msg, "api_key") {
 		t.Errorf("error should still mention PAT and api_key: %s", msg)
