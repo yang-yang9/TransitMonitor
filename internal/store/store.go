@@ -59,6 +59,12 @@ var probeCols = []string{
 	"declared_unavailable", "observed_at", "error",
 }
 
+var balanceCols = []string{
+	"station_id", "observed_at", "remaining", "used", "total",
+	"remaining_usd", "used_usd", "total_usd", "unlimited",
+	"currency", "quota_per_unit", "usd_exchange_rate", "source_endpoint",
+}
+
 // Store wraps a SQLite connection.
 type Store struct {
 	db *sql.DB
@@ -528,6 +534,106 @@ func (s *Store) GroupRatioHistory(ctx context.Context, stationID string, limit i
 	return out, rows.Err()
 }
 
+// InsertBalanceObservation stores one per-poll balance observation.
+func (s *Store) InsertBalanceObservation(ctx context.Context, ob domain.BalanceObservation) error {
+	unlimited := 0
+	if ob.Unlimited {
+		unlimited = 1
+	}
+	q := "INSERT INTO balance_observations (" + strings.Join(balanceCols, ", ") + ") VALUES " + placeholders(len(balanceCols))
+	_, err := s.db.ExecContext(ctx, q,
+		ob.StationID, ob.ObservedAt.Unix(), ob.Remaining, ob.Used, ob.Total,
+		ob.RemainingUSD, ob.UsedUSD, ob.TotalUSD, unlimited,
+		ob.Currency, ob.QuotaPerUnit, ob.USDExchangeRate, ob.SourceEndpoint,
+	)
+	return err
+}
+
+// scanBalance scans one balance_observations row into a BalanceObservation.
+func scanBalance(sc func(...any) error) (domain.BalanceObservation, error) {
+	var ob domain.BalanceObservation
+	var ts int64
+	var unlimited int
+	if err := sc(
+		&ob.StationID, &ts, &ob.Remaining, &ob.Used, &ob.Total,
+		&ob.RemainingUSD, &ob.UsedUSD, &ob.TotalUSD, &unlimited,
+		&ob.Currency, &ob.QuotaPerUnit, &ob.USDExchangeRate, &ob.SourceEndpoint,
+	); err != nil {
+		return ob, err
+	}
+	ob.ObservedAt = time.Unix(ts, 0).Local()
+	ob.Unlimited = unlimited == 1
+	return ob, nil
+}
+
+// LatestBalance returns the most recent balance observation for a station.
+// Returns (zero, sql.ErrNoRows) when none exists.
+func (s *Store) LatestBalance(ctx context.Context, stationID string) (domain.BalanceObservation, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT station_id, observed_at, remaining, used, total,
+		remaining_usd, used_usd, total_usd, unlimited, currency, quota_per_unit, usd_exchange_rate, source_endpoint
+		FROM balance_observations WHERE station_id=? ORDER BY observed_at DESC LIMIT 1`, stationID)
+	return scanBalance(row.Scan)
+}
+
+// PrevBalance returns the most recent balance observation stored BEFORE `before`
+// for a station (zero, sql.ErrNoRows when none). Used by the scheduler to diff
+// the quota_drop_pct alert against the prior reading, before inserting the new one.
+func (s *Store) PrevBalance(ctx context.Context, stationID string, before time.Time) (domain.BalanceObservation, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT station_id, observed_at, remaining, used, total,
+		remaining_usd, used_usd, total_usd, unlimited, currency, quota_per_unit, usd_exchange_rate, source_endpoint
+		FROM balance_observations WHERE station_id=? AND observed_at < ? ORDER BY observed_at DESC LIMIT 1`,
+		stationID, before.Unix())
+	return scanBalance(row.Scan)
+}
+
+// BalanceHistory returns up to `limit` most recent balance observations for a
+// station, oldest-first (for sparkline left→right rendering).
+func (s *Store) BalanceHistory(ctx context.Context, stationID string, limit int) ([]domain.BalanceObservation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT station_id, observed_at, remaining, used, total,
+		remaining_usd, used_usd, total_usd, unlimited, currency, quota_per_unit, usd_exchange_rate, source_endpoint
+		FROM balance_observations WHERE station_id=? ORDER BY observed_at DESC LIMIT ?`, stationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var desc []domain.BalanceObservation
+	for rows.Next() {
+		ob, err := scanBalance(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		desc = append(desc, ob)
+	}
+	out := make([]domain.BalanceObservation, len(desc))
+	for i := range desc {
+		out[i] = desc[len(desc)-1-i]
+	}
+	return out, rows.Err()
+}
+
+// LatestBalances returns the most recent balance observation per station (for
+// the /balance overview page). Stations with no balance reading are omitted.
+func (s *Store) LatestBalances(ctx context.Context) ([]domain.BalanceObservation, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT station_id, observed_at, remaining, used, total,
+		remaining_usd, used_usd, total_usd, unlimited, currency, quota_per_unit, usd_exchange_rate, source_endpoint
+		FROM balance_observations o
+		WHERE observed_at = (SELECT MAX(observed_at) FROM balance_observations WHERE station_id = o.station_id)
+		ORDER BY station_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.BalanceObservation
+	for rows.Next() {
+		ob, err := scanBalance(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ob)
+	}
+	return out, rows.Err()
+}
+
 // DownsampleAndRetain deletes old snapshots (older than snapshotDays) and
 // aggregates ratio_observations older than obsDays into hourly buckets, then
 // deletes the aggregated raw rows. Idempotent.
@@ -542,6 +648,11 @@ func (s *Store) DownsampleAndRetain(ctx context.Context, now time.Time, snapshot
 	obsCutoff := now.AddDate(0, 0, -obsDays).Unix()
 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM snapshots WHERE observed_at < ?", snapCutoff); err != nil {
+		return err
+	}
+	// Balance time series rides the snapshot retention window (one row per
+	// poll, same cadence as snapshots); older rows are dropped wholesale.
+	if _, err := tx.ExecContext(ctx, "DELETE FROM balance_observations WHERE observed_at < ?", snapCutoff); err != nil {
 		return err
 	}
 

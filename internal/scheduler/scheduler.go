@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"transitmonitor/internal/adapter"
+	"transitmonitor/internal/adapter/sub2api"
 	"transitmonitor/internal/alert"
 	"transitmonitor/internal/changedet"
 	"transitmonitor/internal/domain"
@@ -122,6 +123,62 @@ func (s *Scheduler) rulesOfType(typ string) []alert.Rule {
 		}
 	}
 	return out
+}
+
+// balanceSource returns the endpoint a balance reading came from, for the
+// observation's SourceEndpoint field. Mirrors the per-kind probe path.
+func (s *Scheduler) balanceSource(caps domain.CapabilityReport) string {
+	switch caps.Kind {
+	case domain.KindSub2API:
+		return "/api/v1/user/profile"
+	default:
+		return "/api/user/self"
+	}
+}
+
+// evaluateBalanceRules emits the gauge-based balance alerts (quota_below and
+// quota_drop_pct) directly, like endpoint_auth_failed. These evaluate against
+// the just-stored reading (and the prior one for the drop %), not change events.
+func (s *Scheduler) evaluateBalanceRules(ctx context.Context, stationID string, bal domain.BalanceObservation, prev domain.BalanceObservation, now time.Time) {
+	if s.Notifier == nil {
+		return
+	}
+	// quota_below: remaining balance (USD) under threshold. Skip when the
+	// station reports an unlimited wallet (no meaningful "low" to fire on).
+	for _, r := range s.rulesOfType(alert.RuleQuotaBelow) {
+		if bal.Unlimited {
+			continue
+		}
+		if bal.RemainingUSD < r.Threshold {
+			s.dispatchAlert(ctx, alert.AlertEvent{
+				Rule: r.Name, StationID: stationID, Severity: domain.SevCritical,
+				Payload: map[string]any{
+					"remaining_usd": bal.RemainingUSD, "used_usd": bal.UsedUSD,
+					"total_usd": bal.TotalUSD, "threshold_usd": r.Threshold,
+					"currency": bal.Currency, "observed_at": now,
+				},
+				CreatedAt: now,
+			})
+		}
+	}
+	// quota_drop_pct: remaining dropped ≥ threshold % vs the previous reading.
+	for _, r := range s.rulesOfType(alert.RuleQuotaDropPct) {
+		if prev.RemainingUSD <= 0 {
+			continue // no prior reading or prior was 0 — pct undefined
+		}
+		dropPct := (prev.RemainingUSD - bal.RemainingUSD) / prev.RemainingUSD * 100
+		if dropPct >= r.Threshold {
+			s.dispatchAlert(ctx, alert.AlertEvent{
+				Rule: r.Name, StationID: stationID, Severity: domain.SevWarning,
+				Payload: map[string]any{
+					"prev_usd": prev.RemainingUSD, "remaining_usd": bal.RemainingUSD,
+					"drop_pct": dropPct, "threshold_pct": r.Threshold,
+					"observed_at": now,
+				},
+				CreatedAt: now,
+			})
+		}
+	}
 }
 
 // dispatchAlert sends one AlertEvent through the notifier and records it in the
@@ -306,6 +363,9 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 	// Fetch previous group ratios BEFORE inserting the new snapshot, so the
 	// group-ratio diff compares against the prior state (not the just-written one).
 	prevGroupRatios, _ := s.Store.PrevGroupRatios(ctx, stationID, t)
+	// Same pattern for balance: fetch the previous reading before inserting the
+	// new one, so the quota_drop_pct alert compares against the prior reading.
+	prevBalance, _ := s.Store.PrevBalance(ctx, stationID, t)
 	for i := range obs {
 		obs[i].StationID = stationID
 		obs[i].ObservedAt = t
@@ -335,33 +395,48 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 			s.dispatchAlert(ctx, ev)
 		}
 	}
+	// Persist the balance time series (replaces the audit-log-only write). Only
+	// when a balance source succeeded; stations without a balance endpoint stay
+	// silent rather than recording zeros.
 	if caps.HasQuota {
-		_ = s.Store.InsertAuditLog(ctx, "adapter", "quota", stationID, fmt.Sprintf("remaining=%v used=%v", caps.QuotaRemaining, caps.QuotaUsed))
+		bal := domain.NewBalanceFromCaps(caps, t, s.balanceSource(caps))
+		if err := s.Store.InsertBalanceObservation(ctx, bal); err != nil {
+			s.logger().Error("balance store", "station", stationID, "err", err)
+		} else {
+			s.evaluateBalanceRules(ctx, stationID, bal, prevBalance, t)
+			_ = s.Store.InsertAuditLog(ctx, "adapter", "balance", stationID,
+				fmt.Sprintf("remaining_usd=%.4f used_usd=%.4f total_usd=%.4f unlimited=%v src=%s",
+					bal.RemainingUSD, bal.UsedUSD, bal.TotalUSD, bal.Unlimited, bal.SourceEndpoint))
+		}
 	}
-	if s.Prober != nil && found && stn.Probe.Enabled {
+	if s.Prober != nil && found && stn.Probe.Enabled && time.Duration(stn.Probe.Interval) == 0 {
+		// Piggyback probe (backward compat): no dedicated interval → probe runs
+		// every poll. When probe.interval > 0, a dedicated probeLoop handles it.
 		s.runStationProbe(ctx, stn, obs)
 	}
 	return nil
 }
 
 func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs []domain.RatioObservation) {
-	pres, perr := s.Prober.Run(ctx, st, obs)
-	if perr != nil {
-		s.logger().Error("probe", "station", st.ID, "err", perr)
-		return
-	}
-	if pres.Error == "deduped" {
-		return
-	}
-	if err := s.Store.InsertProbeResult(ctx, pres); err != nil {
-		s.logger().Error("probe store", "station", st.ID, "err", err)
-	}
-	_ = s.Store.InsertAuditLog(ctx, "probe", "probe.run", st.ID,
-		fmt.Sprintf("model=%s tokens=%d/%d markup=%.2f%% cost_usd=%.6f declared_unavailable=%v error=%s",
-			pres.Model, pres.TokensIn, pres.TokensOut, pres.MarkupPct, pres.CostUSD, pres.DeclaredUnavailable, pres.Error))
-	if s.Notifier != nil {
-		for _, ev := range alert.Evaluate(s.Rules, nil, []domain.ProbeResult{pres}) {
-			s.dispatchAlert(ctx, ev)
+	for _, model := range st.Probe.TargetModels() {
+		pres, perr := s.Prober.Run(ctx, st, model, obs)
+		if perr != nil {
+			s.logger().Error("probe", "station", st.ID, "model", model, "err", perr)
+			continue
+		}
+		if pres.Error == "deduped" {
+			continue
+		}
+		if err := s.Store.InsertProbeResult(ctx, pres); err != nil {
+			s.logger().Error("probe store", "station", st.ID, "model", model, "err", err)
+		}
+		_ = s.Store.InsertAuditLog(ctx, "probe", "probe.run", st.ID,
+			fmt.Sprintf("model=%s tokens=%d/%d markup=%.2f%% cost_usd=%.6f declared_unavailable=%v error=%s",
+				pres.Model, pres.TokensIn, pres.TokensOut, pres.MarkupPct, pres.CostUSD, pres.DeclaredUnavailable, pres.Error))
+		if s.Notifier != nil {
+			for _, ev := range alert.Evaluate(s.Rules, nil, []domain.ProbeResult{pres}) {
+				s.dispatchAlert(ctx, ev)
+			}
 		}
 	}
 }
@@ -417,6 +492,11 @@ func (s *Scheduler) Run(ctx context.Context) {
 		s.startStationLocked(ctx, st)
 	}
 	s.mu.Unlock()
+	// Refresh the public LiteLLM price table (~3000 models) for sub2api base
+	// prices; one shared background refresher for all sub2api stations.
+	if s.Client != nil {
+		go sub2api.StartLiteLLMRefresher(ctx, s.Client, 24*time.Hour)
+	}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -436,6 +516,46 @@ func (s *Scheduler) startStationLocked(parent context.Context, st domain.Station
 		interval = 2 * time.Minute
 	}
 	go s.pollLoop(ctx, st, interval)
+	// Dedicated probe loop: when probe.interval > 0, the probe runs on its own
+	// (low) cadence independent of poll_interval. Shares the station ctx, so it
+	// is cancelled with the poller on remove/replace.
+	if st.Probe.Enabled && time.Duration(st.Probe.Interval) > 0 {
+		go s.probeLoop(ctx, st)
+	}
+}
+
+// probeLoop runs the real-cost probe on a dedicated cadence (probe.interval),
+// decoupled from polling. Each tick it reads the latest scraped observations
+// from the store (declared prices to reconcile against) and probes every
+// configured target model. The frequency is intentionally low (e.g. 24h) —
+// probes cost real money (tiny chat).
+func (s *Scheduler) probeLoop(ctx context.Context, st domain.Station) {
+	interval := time.Duration(st.Probe.Interval)
+	if interval < time.Minute {
+		interval = time.Minute // guard against misconfig spin; dedup(10m) floors it anyway
+	}
+	// First probe shortly after start so a baseline exists without waiting a
+	// full interval; subsequent probes tick at interval.
+	s.runProbeCycle(ctx, st)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.runProbeCycle(ctx, st)
+		}
+	}
+}
+
+func (s *Scheduler) runProbeCycle(ctx context.Context, st domain.Station) {
+	obs, err := s.Store.LatestRatioObservations(ctx, st.ID)
+	if err != nil {
+		s.logger().Error("probe obs load", "station", st.ID, "err", err)
+		return
+	}
+	s.runStationProbe(ctx, st, obs)
 }
 
 func (s *Scheduler) pollLoop(ctx context.Context, st domain.Station, interval time.Duration) {

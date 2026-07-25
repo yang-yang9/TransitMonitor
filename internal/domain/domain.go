@@ -60,13 +60,26 @@ type AuthConfig struct {
 
 // ProbeConfig governs the real-cost probe for a station.
 type ProbeConfig struct {
-	Enabled            bool   `yaml:"enabled"`
-	Model              string `yaml:"model"`
-	MaxInputTokens     int    `yaml:"max_input_tokens"`
-	MaxOutputTokens    int    `yaml:"max_output_tokens"`
-	MaxCostCentsPerRun int    `yaml:"max_cost_cents_per_run"` // refuse probe if declared cost exceeds this
-	DryRun             bool   `yaml:"dry_run"`                // compute declared cost, do NOT send
-	PromptSeed         string `yaml:"prompt_seed"`            // randomized per-call to avoid cache hits
+	Enabled            bool     `yaml:"enabled"`
+	Model              string   `yaml:"model"`  // single-model shorthand (used if Models empty)
+	Models             []string `yaml:"models"` // multi-model probe list (probes each per cycle)
+	MaxInputTokens     int      `yaml:"max_input_tokens"`
+	MaxOutputTokens    int      `yaml:"max_output_tokens"`
+	MaxCostCentsPerRun int      `yaml:"max_cost_cents_per_run"` // refuse probe if declared cost exceeds this
+	DryRun             bool     `yaml:"dry_run"`                // compute declared cost, do NOT send
+	PromptSeed         string   `yaml:"prompt_seed"`            // randomized per-call to avoid cache hits
+	Interval           Duration `yaml:"interval"`               // dedicated probe cadence (independent of poll_interval). 0 = piggyback on poll (backward compat).
+}
+
+// TargetModels returns the models to probe: Models if set, else [Model].
+func (p ProbeConfig) TargetModels() []string {
+	if len(p.Models) > 0 {
+		return p.Models
+	}
+	if p.Model != "" {
+		return []string{p.Model}
+	}
+	return nil
 }
 
 // Station is a registered monitoring target.
@@ -98,6 +111,10 @@ func (d *Duration) UnmarshalYAML(unmarshal func(any) error) error {
 	var s string
 	if err := unmarshal(&s); err != nil {
 		return err
+	}
+	if s == "" {
+		*d = 0
+		return nil
 	}
 	parsed, err := time.ParseDuration(s)
 	if err != nil {
@@ -132,9 +149,11 @@ type CapabilityReport struct {
 	HasAdminChannels bool
 	HasUserChannels  bool
 	SimpleMode       bool
-	HasQuota         bool
+	HasQuota         bool // a balance/quota source succeeded
 	QuotaRemaining   float64
 	QuotaUsed        float64 // sub2api RunMode=simple
+	QuotaTotal       float64 // total quota/limit as reported (0 = unknown or unlimited — see UnlimitedQuota)
+	UnlimitedQuota   bool    // true when the upstream reports no limit (sub2api quota=0)
 	SelfUseMode      bool    // new-api self_use_mode_enabled
 	QuotaPerUnit     float64
 	USDExchangeRate  float64
@@ -156,6 +175,67 @@ type RawSnapshot struct {
 type GroupRatioSnapshot struct {
 	ObservedAt time.Time
 	Ratios     map[string]float64
+}
+
+// BalanceObservation is one point in a station's balance/quota time series.
+// Raw fields carry the upstream's native units (new-api: internal quota units;
+// sub2api: USD); the USD fields are the normalized, cross-station-comparable
+// values used by the dashboard, alerts, and /metrics.
+type BalanceObservation struct {
+	StationID       string
+	ObservedAt      time.Time
+	Remaining       float64 // raw remaining as reported (new-api quota units; sub2api USD)
+	Used            float64 // raw used as reported
+	Total           float64 // raw total/limit as reported (0 = unknown or unlimited)
+	RemainingUSD    float64 // normalized to USD
+	UsedUSD         float64
+	TotalUSD        float64 // 0 = unknown or unlimited
+	Unlimited       bool    // upstream reports no quota limit
+	Currency        string  // "quota" (new-api internal units) | "USD" (sub2api)
+	QuotaPerUnit    float64 // new-api units-per-USD context (0 = n/a)
+	USDExchangeRate float64 // new-api display exchange-rate context
+	SourceEndpoint  string
+}
+
+// NewBalanceFromCaps builds a BalanceObservation from a capability report,
+// normalizing the upstream-native quota fields to USD. new-api quota is in
+// internal units (QuotaPerUnit units = $1); sub2api balance is already USD.
+// qpu defaults to defaultQuotaPerUnit (500000) when the station didn't expose one.
+func NewBalanceFromCaps(caps CapabilityReport, observedAt time.Time, sourceEndpoint string) BalanceObservation {
+	const defaultQuotaPerUnit = 500000.0
+	qpu := caps.QuotaPerUnit
+	if qpu <= 0 {
+		qpu = defaultQuotaPerUnit
+	}
+	ob := BalanceObservation{
+		StationID: caps.StationID, ObservedAt: observedAt,
+		Remaining: caps.QuotaRemaining, Used: caps.QuotaUsed, Total: caps.QuotaTotal,
+		Unlimited: caps.UnlimitedQuota, QuotaPerUnit: qpu, USDExchangeRate: caps.USDExchangeRate,
+		SourceEndpoint: sourceEndpoint,
+	}
+	switch caps.Kind {
+	case KindSub2API:
+		// sub2api /api/v1/user/profile reports balance in USD directly.
+		ob.Currency = "USD"
+		ob.RemainingUSD = caps.QuotaRemaining
+		ob.UsedUSD = caps.QuotaUsed
+		if caps.UnlimitedQuota {
+			ob.TotalUSD = 0
+		} else {
+			ob.TotalUSD = caps.QuotaTotal
+		}
+	default:
+		// new-api: quota units → USD via QuotaPerUnit.
+		ob.Currency = "quota"
+		ob.RemainingUSD = caps.QuotaRemaining / qpu
+		ob.UsedUSD = caps.QuotaUsed / qpu
+		if caps.UnlimitedQuota {
+			ob.TotalUSD = 0
+		} else {
+			ob.TotalUSD = caps.QuotaTotal / qpu
+		}
+	}
+	return ob
 }
 
 // RatioObservation is the normalized, comparable per-(station,group,model) record.

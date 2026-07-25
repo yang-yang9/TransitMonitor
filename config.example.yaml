@@ -46,6 +46,18 @@ alerts:
       type: poll_failure_streak
       threshold: 3
       enabled: true
+    # Fires when a station's remaining balance (USD) drops below threshold.
+    # threshold=1 means $1. Skips stations reporting an unlimited wallet.
+    - name: balance-low
+      type: quota_below
+      threshold: 1
+      enabled: true
+    # Fires when remaining balance drops >= threshold % vs the previous poll
+    # (possible abnormal consumption). threshold=20 means 20%.
+    - name: balance-drop-20pct
+      type: quota_drop_pct
+      threshold: 20
+      enabled: true
   dingtalk:
     webhook: ""            # https://oapi.dingtalk.com/robot/send?access_token=...
     secret: ""             # DingTalk signing secret
@@ -75,11 +87,13 @@ stations:
     enabled: true
     probe:
       enabled: false       # set true to send a real tiny chat request
-      model: gpt-4o-mini
+      model: gpt-4o-mini   # single-model shorthand (use `models:` for multi-model)
+      # models: [gpt-4o-mini, gpt-4o, claude-3-5-sonnet-20241022]  # probe each per cycle
       max_input_tokens: 8
       max_output_tokens: 1
       max_cost_cents_per_run: 1
       dry_run: true
+      interval: ""        # dedicated probe cadence (e.g. "24h"), independent of poll_interval. empty = piggyback on poll.
   - id: my-sub
     name: My sub2api Station
     base_url: https://sub.example.com
@@ -96,3 +110,7 @@ stations:
     probe:
       enabled: false
       dry_run: true
+      # sub2api 逐模型价来自公开 LiteLLM 表 × group 倍率（运行时自动拉取，~24h 刷新）。
+      # 站长若对渠道做了自定义定价覆写，声明价与实测价会偏差——靠 probe 抓 markup。
+      # models: [gpt-5.5, gpt-5.4-mini]  # 挑关心的模型探测
+      # interval: "24h"                   # 低频探测，省钱

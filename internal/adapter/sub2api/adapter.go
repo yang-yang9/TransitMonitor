@@ -159,6 +159,19 @@ type groupsAvailableResp struct {
 	} `json:"data"`
 }
 
+// userProfileResp is GET /api/v1/user/profile (user JWT). Mirrors sub2api's
+// response.Response wrapper {code,message,data} (code==0 = success), verified
+// against backend/internal/pkg/response/response.go + handler/user_handler.go
+// GetProfile (returns dto.User). balance/frozen_balance are USD.
+type userProfileResp struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Balance       float64 `json:"balance"`        // spendable wallet balance (USD)
+		FrozenBalance float64 `json:"frozen_balance"` // locked/reserved balance (USD)
+	} `json:"data"`
+}
+
 func (a *Adapter) doGet(ctx context.Context, path, bearer string) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.BaseURL+path, nil)
 	if err != nil {
@@ -226,6 +239,18 @@ func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityRepor
 		if status, _, err := a.jwtGet(ctx, "/api/v1/channels/available"); err == nil {
 			caps.HasUserChannels = status == 200
 			caps.Endpoints = append(caps.Endpoints, endpoint("/api/v1/channels/available", status, nil, now))
+		}
+		// /api/v1/user/profile (user JWT) — wallet balance. balance/frozen are
+		// already USD (no QuotaPerUnit conversion needed). A wallet has no fixed
+		// limit, so Total stays 0 (unknown, not unlimited).
+		if status, body, err := a.jwtGet(ctx, "/api/v1/user/profile"); err == nil && status == 200 {
+			var pr userProfileResp
+			if json.Unmarshal(body, &pr) == nil && pr.Code == 0 {
+				caps.HasQuota = true
+				caps.QuotaRemaining = pr.Data.Balance
+				caps.QuotaUsed = pr.Data.FrozenBalance
+			}
+			caps.Endpoints = append(caps.Endpoints, endpoint("/api/v1/user/profile", status, nil, now))
 		}
 	}
 	return caps, nil

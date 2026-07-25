@@ -215,6 +215,7 @@ func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityRepor
 			var us userSelfResp
 			if json.Unmarshal(body, &us) == nil {
 				caps.HasQuota = true
+				caps.QuotaTotal = us.Data.Quota
 				caps.QuotaRemaining = us.Data.Quota - us.Data.UsedQuota
 				caps.QuotaUsed = us.Data.UsedQuota
 			}

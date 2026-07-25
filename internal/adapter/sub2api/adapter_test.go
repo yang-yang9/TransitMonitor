@@ -342,3 +342,48 @@ func TestGroupsAvailablePopulatesGroupRatios(t *testing.T) {
 		t.Fatalf("group ratios wrong: %v", snap.GroupRatios)
 	}
 }
+
+// TestUserProfilePopulatesBalance: /api/v1/user/profile (user JWT) is the
+// sub2api balance source. balance/frozen_balance are USD and must populate
+// caps.{HasQuota,QuotaRemaining,QuotaUsed} without a QuotaPerUnit conversion.
+func TestUserProfilePopulatesBalance(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/sub2api/billing", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, billingResp{EffectiveRateMultiplier: 0.15, GroupRateMultiplier: 0.15})
+	})
+	mux.HandleFunc("/api/v1/groups/available", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"code":0,"data":[{"name":"default","rate_multiplier":0.15}]}`)
+	})
+	mux.HandleFunc("/api/v1/channels/available", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, channelsAvailableResp{Success: true})
+	})
+	mux.HandleFunc("/api/v1/user/profile", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer jwt-1" {
+			writeJSON(w, 401, map[string]any{"message": "auth"})
+			return
+		}
+		fmt.Fprint(w, `{"code":0,"message":"","data":{"id":1,"balance":42.50,"frozen_balance":3.25}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a := New("s1", srv.URL, "sk-1", "jwt-1", "", "", "", "default", srv.Client())
+	caps, err := a.ProbeCapabilities(context.Background())
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if !caps.HasQuota {
+		t.Fatal("HasQuota should be true")
+	}
+	if !eq(caps.QuotaRemaining, 42.50) {
+		t.Errorf("QuotaRemaining: want 42.50 got %v", caps.QuotaRemaining)
+	}
+	if !eq(caps.QuotaUsed, 3.25) {
+		t.Errorf("QuotaUsed (frozen): want 3.25 got %v", caps.QuotaUsed)
+	}
+	// NewBalanceFromCaps must keep sub2api values in USD (no /QuotaPerUnit math).
+	ob := domain.NewBalanceFromCaps(caps, time.Time{}, "/api/v1/user/profile")
+	if ob.Currency != "USD" || !eq(ob.RemainingUSD, 42.50) || !eq(ob.UsedUSD, 3.25) {
+		t.Errorf("balance observation wrong: %+v", ob)
+	}
+}

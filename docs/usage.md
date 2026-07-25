@@ -100,7 +100,7 @@ stations:
     poll_interval: 3m
 ```
 - new-api：`/api/pricing` 默认公开（不需 PAT 也能抓）；`/api/ratio_config` 默认关（站需开 `ExposeRatioEnabled`）。
-- sub2api：仅 sk-key 时只读自己 key 的 `effective_rate_multiplier`；要每模型价需 JWT + 站开启 available-channels。simple 模式（billing 404）→ 观测标 `declared-unavailable (simple mode)`。
+- sub2api：分组倍率取自 `/api/v1/groups/available`（user JWT，非管理员可拿全部分组倍率）；逐模型价 = 公开 LiteLLM 表 × group 倍率（运行时自动拉取 `BerriAI/litellm` 价表，~24h 刷新，离线用内置样本兜底）。`/v1/models` 列模型清单需 sk-key 有余额（无余额则 403 `INSUFFICIENT_BALANCE`，降级为 `missing-base-price`）。站长渠道自定义覆写价只有 admin 开 available-channels 才拿得到——否则靠真实成本探测抓 markup。simple 模式（billing 404）→ `declared-unavailable (simple mode)`。
 
 ## 6. 告警规则
 `type` ∈ `delta_pct` | `delta_abs` | `model_added` | `model_removed` | `probe_markup_pct` | `endpoint_auth_failed` | `poll_failure_streak`。`threshold` 对应阈值；`enabled:false` 不触发。
@@ -108,10 +108,12 @@ stations:
 - 通用 webhook：`alerts.webhook.url` → POST JSON `{station,model,field,old,new,delta_pct,severity,...}`。
 
 ## 7. 真实成本探测
-站 `probe.enabled:true` 时，每轮抓取后对 `probe.model` 发一次**非流式**最小 chat 请求，读 usage delta，反推真实有效倍率并对账 markup：
+站 `probe.enabled:true` 时，对 `probe.models`（或单模型 `probe.model`）逐个发**非流式**最小 chat 请求，读 usage delta，反推真实有效倍率并对账 markup：
 - new-api：`/v1/dashboard/billing/usage`（sk-key，`total_usage` cents）前后 delta。
 - sub2api：`/v1/usage`（`total.actual_cost`）前后 delta。
 护栏：`max_input_tokens`/`max_output_tokens` 硬上限、`max_cost_cents_per_run` 预估拦截、`dry_run` 不发只记声明成本、`(station,model)` 10min 去重。结果在 `/api/probes?station=`，审计在 `/api/audit`。**先 `dry_run:true` 确认成本再开。**
+- `probe.interval`（如 `24h`）：探测走**独立低频节奏**，与 `poll_interval` 解耦——探测要花钱，频率通常很低。留空则随每次 poll 探测（旧行为）。
+- 用途：sub2api 站长若对渠道做了**自定义定价覆写**，声明价（LiteLLM×倍率）与实测价会偏差，靠 probe 抓 markup。
 
 ## 8. 保留与降采样
 - `snapshots` 保留 7 天；`ratio_observations` 保留 30 天，超期按 `(station,model,hour)` 聚合 avg/min/max。

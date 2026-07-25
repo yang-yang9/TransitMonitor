@@ -33,8 +33,8 @@ func TestLoadExample(t *testing.T) {
 	if f.Timezone != "Asia/Shanghai" {
 		t.Errorf("timezone: want Asia/Shanghai, got %q", f.Timezone)
 	}
-	if len(f.Alerts.Rules) != 5 {
-		t.Errorf("want 5 alert rules, got %d", len(f.Alerts.Rules))
+	if len(f.Alerts.Rules) != 7 {
+		t.Errorf("want 7 alert rules, got %d", len(f.Alerts.Rules))
 	}
 	// QQ block parses into the QQ struct fields.
 	if f.Alerts.QQ.AppID != "" || f.Alerts.QQ.GroupOpenID != "" {

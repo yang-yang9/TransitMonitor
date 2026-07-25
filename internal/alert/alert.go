@@ -33,6 +33,8 @@ const (
 	RuleEndpointAuthFail   = "endpoint_auth_failed"
 	RulePollFailureStreak  = "poll_failure_streak"
 	RuleGroupRatioDeltaPct = "group_ratio_delta_pct"
+	RuleQuotaBelow         = "quota_below"    // remaining balance (USD) below threshold
+	RuleQuotaDropPct       = "quota_drop_pct" // remaining balance dropped ≥ threshold % vs previous poll
 )
 
 // Rule is an alerting rule.

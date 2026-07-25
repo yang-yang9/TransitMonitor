@@ -39,16 +39,16 @@ func NewProber(client *http.Client) *Prober {
 // SetDedupe overrides the dedupe window (for tests).
 func (p *Prober) SetDedupe(d time.Duration) { p.dedupe = d }
 
-// Run executes one probe against the station, using declared (the latest
-// scraped observations) to find the model's declared price. Returns a
-// ProbeResult (with .Error set on graceful failures — never a hard error
-// unless the HTTP call itself fails).
-func (p *Prober) Run(ctx context.Context, st domain.Station, declared []domain.RatioObservation) (domain.ProbeResult, error) {
-	res := domain.ProbeResult{StationID: st.ID, Model: st.Probe.Model, ObservedAt: p.Now()}
+// Run executes one probe against the station for the given model, using
+// declared (the latest scraped observations) to find the model's declared
+// price. Returns a ProbeResult (with .Error set on graceful failures — never a
+// hard error unless the HTTP call itself fails).
+func (p *Prober) Run(ctx context.Context, st domain.Station, model string, declared []domain.RatioObservation) (domain.ProbeResult, error) {
+	res := domain.ProbeResult{StationID: st.ID, Model: model, ObservedAt: p.Now()}
 
 	var dec *domain.RatioObservation
 	for i := range declared {
-		if declared[i].ModelName == st.Probe.Model {
+		if declared[i].ModelName == model {
 			dec = &declared[i]
 			break
 		}
@@ -66,7 +66,7 @@ func (p *Prober) Run(ctx context.Context, st domain.Station, declared []domain.R
 	}
 
 	// Dedupe per (station, model).
-	key := st.ID + "|" + st.Probe.Model
+	key := st.ID + "|" + model
 	p.mu.Lock()
 	if last, ok := p.last[key]; ok && p.Now().Sub(last) < p.dedupe {
 		p.mu.Unlock()
@@ -93,9 +93,9 @@ func (p *Prober) Run(ctx context.Context, st domain.Station, declared []domain.R
 
 	switch st.Kind {
 	case domain.KindNewAPI:
-		return p.runNewAPI(ctx, st, dec, res, pEst)
+		return p.runNewAPI(ctx, st, model, dec, res, pEst)
 	case domain.KindSub2API:
-		return p.runSub2API(ctx, st, dec, res, pEst)
+		return p.runSub2API(ctx, st, model, dec, res, pEst)
 	default:
 		res.Error = "unsupported-kind"
 		return res, nil
@@ -115,12 +115,12 @@ type chatResp struct {
 	} `json:"usage"`
 }
 
-func (p *Prober) runNewAPI(ctx context.Context, st domain.Station, dec *domain.RatioObservation, res domain.ProbeResult, pEst int) (domain.ProbeResult, error) {
+func (p *Prober) runNewAPI(ctx context.Context, st domain.Station, model string, dec *domain.RatioObservation, res domain.ProbeResult, pEst int) (domain.ProbeResult, error) {
 	u0, err := p.newapiUsage(ctx, st)
 	if err != nil {
 		return res, err
 	}
-	P, C, err := p.chat(ctx, st, pEst)
+	P, C, err := p.chat(ctx, st, model, pEst)
 	if err != nil {
 		res.Error = "chat-failed"
 		return res, nil
@@ -180,12 +180,12 @@ type sub2apiUsageResp struct {
 	} `json:"total"`
 }
 
-func (p *Prober) runSub2API(ctx context.Context, st domain.Station, dec *domain.RatioObservation, res domain.ProbeResult, pEst int) (domain.ProbeResult, error) {
+func (p *Prober) runSub2API(ctx context.Context, st domain.Station, model string, dec *domain.RatioObservation, res domain.ProbeResult, pEst int) (domain.ProbeResult, error) {
 	a0, err := p.sub2apiUsage(ctx, st)
 	if err != nil {
 		return res, err
 	}
-	P, C, err := p.chat(ctx, st, pEst)
+	P, C, err := p.chat(ctx, st, model, pEst)
 	if err != nil {
 		res.Error = "chat-failed"
 		return res, nil
@@ -231,14 +231,14 @@ func (p *Prober) sub2apiUsage(ctx context.Context, st domain.Station) (float64, 
 }
 
 // chat sends a tiny non-streaming chat completion and returns prompt/completion tokens.
-func (p *Prober) chat(ctx context.Context, st domain.Station, pEst int) (int, int, error) {
+func (p *Prober) chat(ctx context.Context, st domain.Station, model string, pEst int) (int, int, error) {
 	prompt := fmt.Sprintf("probe-%d", atomic.AddUint64(&p.counter, 1))
 	maxOut := st.Probe.MaxOutputTokens
 	if maxOut <= 0 {
 		maxOut = 1
 	}
 	body, _ := json.Marshal(map[string]any{
-		"model":      st.Probe.Model,
+		"model":      model,
 		"max_tokens": maxOut,
 		"stream":     false,
 		"messages":   []map[string]string{{"role": "user", "content": prompt}},

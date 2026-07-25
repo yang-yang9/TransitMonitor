@@ -63,7 +63,7 @@ func fixedProber(t *testing.T, srv *httptest.Server) *Prober {
 func TestProber_MarkupZero(t *testing.T) {
 	srv, chatCalls := mockNewAPIProbe(t, 0, 0.003) // delta_quota=15 → measured_RG=1.25=declared → markup 0
 	p := fixedProber(t, srv)
-	res, err := p.Run(context.Background(), probeStation(srv.URL, false, 0), declared("gpt-4o-mini", 2.5, 1.25, 4))
+	res, err := p.Run(context.Background(), probeStation(srv.URL, false, 0), "gpt-4o-mini", declared("gpt-4o-mini", 2.5, 1.25, 4))
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestProber_MarkupZero(t *testing.T) {
 func TestProber_Markup100(t *testing.T) {
 	srv, _ := mockNewAPIProbe(t, 0, 0.006) // delta_quota=30 → measured_RG=2.5 → markup 100%
 	p := fixedProber(t, srv)
-	res, _ := p.Run(context.Background(), probeStation(srv.URL, false, 0), declared("gpt-4o-mini", 2.5, 1.25, 4))
+	res, _ := p.Run(context.Background(), probeStation(srv.URL, false, 0), "gpt-4o-mini", declared("gpt-4o-mini", 2.5, 1.25, 4))
 	if d := res.MeasuredUSDPer1M - 5.0; d < 0 || d > 1e-6 {
 		t.Errorf("measured: want 5.0 got %v", res.MeasuredUSDPer1M)
 	}
@@ -98,7 +98,7 @@ func TestProber_DryRun(t *testing.T) {
 	srv, chatCalls := mockNewAPIProbe(t, 0, 0.003)
 	p := fixedProber(t, srv)
 	st := probeStation(srv.URL, true, 0) // DryRun=true
-	res, _ := p.Run(context.Background(), st, declared("gpt-4o-mini", 2.5, 1.25, 4))
+	res, _ := p.Run(context.Background(), st, "gpt-4o-mini", declared("gpt-4o-mini", 2.5, 1.25, 4))
 	if res.Error != "" {
 		t.Errorf("dry-run error: %s", res.Error)
 	}
@@ -115,7 +115,7 @@ func TestProber_CostGuardrail(t *testing.T) {
 	p := fixedProber(t, srv)
 	// declared input 100000 USD/1M × 8 tokens / 1e6 = 0.8 USD = 80 cents > 1 cent guardrail.
 	st := probeStation(srv.URL, false, 1)
-	res, _ := p.Run(context.Background(), st, declared("gpt-4o-mini", 100000, 50000, 4))
+	res, _ := p.Run(context.Background(), st, "gpt-4o-mini", declared("gpt-4o-mini", 100000, 50000, 4))
 	if res.Error != "cost-guardrail-exceeded" {
 		t.Errorf("want cost-guardrail-exceeded got %q", res.Error)
 	}
@@ -127,7 +127,7 @@ func TestProber_CostGuardrail(t *testing.T) {
 func TestProber_ModelNotAvailable(t *testing.T) {
 	srv, _ := mockNewAPIProbe(t, 0, 0.003)
 	p := fixedProber(t, srv)
-	res, _ := p.Run(context.Background(), probeStation(srv.URL, false, 0), declared("other-model", 2.5, 1.25, 4))
+	res, _ := p.Run(context.Background(), probeStation(srv.URL, false, 0), "gpt-4o-mini", declared("other-model", 2.5, 1.25, 4))
 	if res.Error != "model-not-available" {
 		t.Errorf("want model-not-available got %q", res.Error)
 	}
