@@ -331,6 +331,7 @@ var navItems = []navItem{
 	{"/audit", "", "audit"},
 	{"/alerts", "", "alerts"},
 	{"/stations", "", "stations"},
+	{"/settings", "", "settings"},
 	{"/metrics", "", "metrics"},
 }
 

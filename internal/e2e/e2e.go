@@ -8,6 +8,8 @@ package e2e
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -80,14 +82,74 @@ func mockSub2API(s *mockState) *httptest.Server {
 		fmt.Fprintf(w, `{"object":"sub2api.key_billing","effective_rate_multiplier":%v,"group_rate_multiplier":%v,"resolved_rate_multiplier":%v,"peak_rate_enabled":false}`, eff, eff, eff)
 	})
 	mux.HandleFunc("/api/v1/channels/available", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer jwt-test" {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer jwt-test" && !isValidMockJWT(auth) {
 			w.WriteHeader(401)
 			return
 		}
 		_, _, _, in, out := s.snapshot()
 		fmt.Fprintf(w, `{"success":true,"data":[{"name":"c1","platforms":[{"platform":"anthropic","supported_models":[{"name":"gpt-4o-mini","pricing":{"input_price":%v,"output_price":%v}}]}]}]}`, in, out)
 	})
+	mux.HandleFunc("/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		var req struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(400)
+			return
+		}
+		if req.Email != "admin@test.com" || req.Password != "pass123" {
+			w.WriteHeader(401)
+			return
+		}
+		token := makeMockJWT(time.Now().Add(24 * time.Hour).Unix())
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"token":"%s"}`, token)
+	})
 	return httptest.NewServer(mux)
+}
+
+func makeMockJWT(exp int64) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d,"sub":"admin@test.com"}`, exp)))
+	sig := base64.RawURLEncoding.EncodeToString([]byte("mocksig"))
+	return header + "." + payload + "." + sig
+}
+
+func isValidMockJWT(auth string) bool {
+	if len(auth) < 8 || auth[:7] != "Bearer " {
+		return false
+	}
+	token := auth[7:]
+	parts := splitDot(token)
+	return len(parts) == 3
+}
+
+func splitDot(s string) []string {
+	var parts []string
+	for {
+		i := indexOf(s, '.')
+		if i < 0 {
+			parts = append(parts, s)
+			return parts
+		}
+		parts = append(parts, s[:i])
+		s = s[i+1:]
+	}
+}
+
+func indexOf(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
 }
 
 // Run executes the end-to-end self-test and returns nil on success.
@@ -116,7 +178,7 @@ func Run() error {
 			Probe: domain.ProbeConfig{Enabled: true, Model: "gpt-4o",
 				MaxInputTokens: 8, MaxOutputTokens: 1, DryRun: false}},
 		{ID: "sb", Name: "Sub2API mock", Kind: domain.KindSub2API, BaseURL: subSrv.URL,
-			Auth:         domain.AuthConfig{APIKey: "sk-test", JWT: "jwt-test", Group: "default"},
+			Auth:         domain.AuthConfig{APIKey: "sk-test", AdminEmail: "admin@test.com", AdminPass: "pass123", Group: "default"},
 			Enabled:      true,
 			PollInterval: domain.Duration(2 * time.Minute)},
 	}

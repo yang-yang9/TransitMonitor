@@ -22,6 +22,12 @@ type Adapter interface {
 	FetchRatios(ctx context.Context, caps domain.CapabilityReport) (domain.RawSnapshot, []domain.RatioObservation, error)
 }
 
+// JWTRefresher is optionally implemented by adapters that accept a dynamic JWT
+// update (e.g. sub2api after auto-login).
+type JWTRefresher interface {
+	SetJWT(jwt string)
+}
+
 // NewAdapter builds the right adapter for a station's kind.
 func NewAdapter(s domain.Station, client *http.Client) (Adapter, error) {
 	switch s.Kind {

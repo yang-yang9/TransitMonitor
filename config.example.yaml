@@ -22,11 +22,34 @@ alerts:
     - name: model-removed
       type: model_removed
       enabled: true
+    - name: group-ratio-up
+      type: group_ratio_delta_pct
+      threshold: 10
+      enabled: true
+    # Fires when a previously-OK endpoint starts returning 401/403 (bad/expired key).
+    - name: endpoint-auth-failed
+      type: endpoint_auth_failed
+      enabled: true
+    # Fires after N consecutive scrape failures (threshold = N).
+    - name: poll-failure-streak
+      type: poll_failure_streak
+      threshold: 3
+      enabled: true
   dingtalk:
     webhook: ""            # https://oapi.dingtalk.com/robot/send?access_token=...
     secret: ""             # DingTalk signing secret
   webhook:
     url: ""                # generic webhook URL
+  lark:
+    webhook: ""            # https://open.feishu.cn/open-apis/bot/v2/hook/...
+    secret: ""             # 飞书 signing secret (optional)
+  slack:
+    webhook: ""            # https://hooks.slack.com/services/...
+  # QQ 机器人 (官方 Bot OpenAPI v2). 也可在 dashboard /settings 页面在线配置.
+  qq:
+    app_id: ""             # 机器人在 QQ 开放平台的 AppID
+    app_secret: ""         # AppSecret (加密落库于 /settings 保存时)
+    group_openid: ""       # 目标群的 group_openid
 
 stations:
   - id: my-relay
@@ -53,6 +76,8 @@ stations:
     auth:
       api_key: "sk-..."     # for /v1/* + billing
       jwt: ""                # user JWT for /api/v1/channels/available (per-model prices)
+      admin_email: ""        # sub2api login email (for auto JWT refresh)
+      admin_pass: ""         # sub2api login password (for auto JWT refresh)
       admin_api_key: ""      # admin x-api-key (reserved)
       group: default
     poll_interval: 3m

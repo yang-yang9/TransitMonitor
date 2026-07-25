@@ -33,7 +33,15 @@ func TestLoadExample(t *testing.T) {
 	if f.Timezone != "Asia/Shanghai" {
 		t.Errorf("timezone: want Asia/Shanghai, got %q", f.Timezone)
 	}
-	if len(f.Alerts.Rules) != 2 {
-		t.Errorf("want 2 alert rules, got %d", len(f.Alerts.Rules))
+	if len(f.Alerts.Rules) != 5 {
+		t.Errorf("want 5 alert rules, got %d", len(f.Alerts.Rules))
+	}
+	// QQ block parses into the QQ struct fields.
+	if f.Alerts.QQ.AppID != "" || f.Alerts.QQ.GroupOpenID != "" {
+		t.Errorf("qq block should parse empty by default, got app_id=%q group_openid=%q",
+			f.Alerts.QQ.AppID, f.Alerts.QQ.GroupOpenID)
+	}
+	if f.Alerts.Lark.Webhook != "" {
+		t.Errorf("lark block should parse empty by default")
 	}
 }

@@ -51,6 +51,9 @@ func New(stationID, baseURL, apiKey, jwt, adminAPIKey, group string, client *htt
 // SetClock injects a clock (for tests).
 func (a *Adapter) SetClock(f func() time.Time) { a.now = f }
 
+// SetJWT updates the JWT used for authenticated endpoints (e.g. after auto-login refresh).
+func (a *Adapter) SetJWT(jwt string) { a.JWT = jwt }
+
 func (a *Adapter) nowTime() time.Time {
 	if a.now != nil {
 		return a.now()
@@ -126,6 +129,19 @@ func endpoint(path string, status int, err error, at time.Time) domain.EndpointS
 	return es
 }
 
+// noRatioSourceErr returns the "no ratio source" error, wrapped with
+// domain.ErrAuthFailed when any probed authenticated endpoint returned 401/403
+// (so the scheduler can emit endpoint_auth_failed alerts for sub2api too).
+func noRatioSourceErr(stationID string, caps domain.CapabilityReport) error {
+	base := fmt.Errorf("no ratio source available for station %s", stationID)
+	for _, e := range caps.Endpoints {
+		if e.HTTPStatus == 401 || e.HTTPStatus == 403 {
+			return fmt.Errorf("%w: %s returned %d: %w", base, e.Path, e.HTTPStatus, domain.ErrAuthFailed)
+		}
+	}
+	return base
+}
+
 // ProbeCapabilities discovers which endpoints/auth succeed.
 func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityReport, error) {
 	caps := domain.CapabilityReport{StationID: a.StationID, Kind: domain.KindSub2API}
@@ -162,7 +178,7 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 		RawPayloads: map[string][]byte{},
 	}
 	if !caps.HasBilling && !caps.SimpleMode && !caps.HasUserChannels {
-		return snap, nil, fmt.Errorf("no ratio source available for station %s", a.StationID)
+		return snap, nil, noRatioSourceErr(a.StationID, caps)
 	}
 
 	data := normalize.Sub2APIRatioData{SimpleMode: caps.SimpleMode}

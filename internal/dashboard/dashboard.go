@@ -22,10 +22,14 @@ type Server struct {
 	stations []domain.Station
 	store    *store.Store
 	token    string
+	encKey   []byte // for persisting /settings notifier secrets at rest
 	mgr      StationManager
 	mux      *chi.Mux
 	httpSrv  *http.Server
 }
+
+// SetEncKey enables /settings notifier-secret persistence (mirrors scheduler.SetEncKey).
+func (s *Server) SetEncKey(k []byte) { s.encKey = k }
 
 // New constructs a dashboard server. token=="" means localhost-only.
 func New(stations []domain.Station, st *store.Store, token string) *Server {
@@ -45,6 +49,7 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Get("/stations/{id}", s.stationDetailHTML)
 	r.Get("/stations/new", s.stationFormHTML)
 	r.Get("/stations/{id}/edit", s.stationEditHTML)
+	r.Get("/settings", s.settingsHTML)
 	r.Get("/api/stations", s.stationsJSON)
 	r.Get("/api/ratios", s.ratiosJSON)
 	r.Get("/api/changes", s.changesJSON)
@@ -55,6 +60,9 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Put("/api/stations/{id}", s.stationsUpsert)
 	r.Delete("/api/stations/{id}", s.stationsDelete)
 	r.Post("/api/stations/{id}/poll", s.stationsPoll)
+	r.Post("/api/stations/{id}/login", s.stationsLogin)
+	r.Post("/api/settings", s.settingsSave)
+	r.Post("/api/settings/test", s.settingsTest)
 	s.mux = r
 	return s
 }

@@ -10,10 +10,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"transitmonitor/internal/domain"
@@ -329,4 +333,193 @@ func (s *SlackNotifier) Send(ctx context.Context, ev AlertEvent) error {
 		return fmt.Errorf("slack: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// NotifierConfig is the JSON-serializable configuration for all notifier kinds.
+// It mirrors config.AlertsConfig's notifier blocks so it can round-trip through
+// the encrypted store row and the /settings form. Empty fields → notifier skipped.
+type NotifierConfig struct {
+	DingTalk struct {
+		Webhook string `json:"webhook"`
+		Secret  string `json:"secret"`
+	} `json:"dingtalk"`
+	Webhook struct {
+		URL string `json:"url"`
+	} `json:"webhook"`
+	Lark struct {
+		Webhook string `json:"webhook"`
+		Secret  string `json:"secret"`
+	} `json:"lark"`
+	Slack struct {
+		Webhook string `json:"webhook"`
+	} `json:"slack"`
+	QQ struct {
+		AppID       string `json:"app_id"`
+		AppSecret   string `json:"app_secret"`
+		GroupOpenID string `json:"group_openid"`
+	} `json:"qq"`
+}
+
+// BuildDispatcher assembles a *Dispatcher (or nil if no notifier is configured)
+// from a NotifierConfig. client may be nil → http.DefaultClient. Used by main at
+// startup and by the scheduler when reloading notifiers from the /settings page.
+func BuildDispatcher(nc NotifierConfig, client *http.Client) Notifier {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	var ns []Notifier
+	if nc.DingTalk.Webhook != "" {
+		ns = append(ns, NewDingTalk(nc.DingTalk.Webhook, nc.DingTalk.Secret, client))
+	}
+	if nc.Webhook.URL != "" {
+		ns = append(ns, &WebhookNotifier{URL: nc.Webhook.URL, Client: client})
+	}
+	if nc.Lark.Webhook != "" {
+		ns = append(ns, NewLark(nc.Lark.Webhook, nc.Lark.Secret, client))
+	}
+	if nc.Slack.Webhook != "" {
+		ns = append(ns, &SlackNotifier{WebhookURL: nc.Slack.Webhook, Client: client})
+	}
+	if nc.QQ.AppID != "" && nc.QQ.AppSecret != "" && nc.QQ.GroupOpenID != "" {
+		ns = append(ns, NewQQ(nc.QQ.AppID, nc.QQ.AppSecret, nc.QQ.GroupOpenID, client))
+	}
+	if len(ns) == 0 {
+		return nil
+	}
+	return &Dispatcher{Notifiers: ns}
+}
+
+// qqBaseURL / qqTokenURL are vars so tests can point them at an httptest server.
+var (
+	qqTokenURL = "https://bots.qq.com/app/getAppAccessToken"
+	qqBaseURL  = "https://api.sgroup.qq.com"
+)
+
+// QQNotifier sends a message to a QQ group via the official Bot OpenAPI v2.
+// Auth uses AppID+AppSecret → access_token (cached, refreshed 60s before expiry),
+// then POST /v2/groups/{group_openid}/messages with Authorization: QQBot {token}.
+//
+// NOTE: proactive group pushes may require the bot to have 主动消息 permission on
+// the QQ open platform; the call is issued as documented regardless.
+type QQNotifier struct {
+	AppID, AppSecret, GroupOpenID string
+	Client                        *http.Client
+	now                           func() time.Time
+
+	mu       sync.Mutex
+	token    string
+	expireAt time.Time
+}
+
+// NewQQ constructs a QQ bot notifier.
+func NewQQ(appID, appSecret, groupOpenID string, client *http.Client) *QQNotifier {
+	return &QQNotifier{AppID: appID, AppSecret: appSecret, GroupOpenID: groupOpenID, Client: client, now: time.Now}
+}
+
+// SetClock injects a clock (tests).
+func (q *QQNotifier) SetClock(f func() time.Time) { q.now = f }
+
+type qqTokenResp struct {
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"`
+}
+
+// accessToken returns a valid cached token, refreshing via getAppAccessToken
+// when empty or within 60s of expiry.
+func (q *QQNotifier) accessToken(ctx context.Context) (string, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.token != "" && q.now().Before(q.expireAt.Add(-60*time.Second)) {
+		return q.token, nil
+	}
+	c := q.Client
+	if c == nil {
+		c = http.DefaultClient
+	}
+	body, _ := json.Marshal(map[string]string{"appId": q.AppID, "clientSecret": q.AppSecret})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, qqTokenURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("qq access_token: status %d: %s", resp.StatusCode, string(rb))
+	}
+	var tr qqTokenResp
+	if err := json.Unmarshal(rb, &tr); err != nil {
+		return "", fmt.Errorf("qq access_token: decode: %w", err)
+	}
+	if tr.AccessToken == "" {
+		return "", errors.New("qq access_token: empty token in response")
+	}
+	exp := time.Duration(tr.ExpiresIn) * time.Second
+	if exp <= 0 {
+		exp = 7200 * time.Second
+	}
+	q.token = tr.AccessToken
+	q.expireAt = q.now().Add(exp)
+	return q.token, nil
+}
+
+func (q *QQNotifier) invalidateToken() {
+	q.mu.Lock()
+	q.token = ""
+	q.expireAt = time.Time{}
+	q.mu.Unlock()
+}
+
+func (q *QQNotifier) Send(ctx context.Context, ev AlertEvent) error {
+	c := q.Client
+	if c == nil {
+		c = http.DefaultClient
+	}
+	text := fmt.Sprintf("[%s] %s\nstation: %s\nmodel: %s\npayload: %v", ev.Severity, ev.Rule, ev.StationID, ev.Model, ev.Payload)
+	return q.postMessage(ctx, c, text, true)
+}
+
+func (q *QQNotifier) postMessage(ctx context.Context, c *http.Client, text string, allowRetry bool) error {
+	tok, err := q.accessToken(ctx)
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]any{"content": text, "msg_type": 0})
+	u := qqBaseURL + "/v2/groups/" + url.PathEscape(q.GroupOpenID) + "/messages"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "QQBot "+tok)
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(resp.Body)
+	// 401 → token stale; invalidate, refetch, retry once.
+	if resp.StatusCode == 401 && allowRetry {
+		q.invalidateToken()
+		return q.postMessage(ctx, c, text, false)
+	}
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("qq send: status %d: %s", resp.StatusCode, truncateErr(rb))
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("qq send: status %d: %s", resp.StatusCode, truncateErr(rb))
+	}
+	return nil
+}
+
+func truncateErr(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > 200 {
+		s = s[:200] + "..."
+	}
+	return s
 }

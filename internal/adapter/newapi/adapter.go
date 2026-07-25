@@ -160,6 +160,16 @@ func endpoint(path string, status int, err error, at time.Time) domain.EndpointS
 	return es
 }
 
+// authStatusErr returns a fetch error for a non-200 ratio endpoint. 401/403 are
+// wrapped with domain.ErrAuthFailed so the scheduler can emit
+// endpoint_auth_failed alerts; other statuses are plain errors.
+func authStatusErr(src string, status int) error {
+	if status == 401 || status == 403 {
+		return fmt.Errorf("%s: status %d: %w", src, status, domain.ErrAuthFailed)
+	}
+	return fmt.Errorf("%s: status %d", src, status)
+}
+
 // ProbeCapabilities discovers which endpoints/auth succeed.
 func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityReport, error) {
 	caps := domain.CapabilityReport{
@@ -250,7 +260,7 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 			return snap, nil, err
 		}
 		if status != 200 {
-			return snap, nil, fmt.Errorf("pricing: status %d", status)
+			return snap, nil, authStatusErr("pricing", status)
 		}
 		snap.RawPayloads[src] = body
 		var pr pricingResp
@@ -266,7 +276,7 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 			return snap, nil, err
 		}
 		if status != 200 {
-			return snap, nil, fmt.Errorf("ratio_config: status %d", status)
+			return snap, nil, authStatusErr("ratio_config", status)
 		}
 		snap.RawPayloads[src] = body
 		var rc ratioConfigResp
@@ -282,7 +292,7 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 			return snap, nil, err
 		}
 		if status != 200 {
-			return snap, nil, fmt.Errorf("option: status %d", status)
+			return snap, nil, authStatusErr("option", status)
 		}
 		snap.RawPayloads[src] = body
 		var or optionResp

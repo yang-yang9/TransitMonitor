@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -22,6 +23,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// ErrEncryptionDisabled is returned by notifier-config methods when called
+// without an encryption key (TRANSMONITOR_ENCRYPTION_KEY unset). Callers fall
+// back to YAML config in that case.
+var ErrEncryptionDisabled = errors.New("encryption disabled: set TRANSMONITOR_ENCRYPTION_KEY to persist notifier secrets")
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
@@ -578,6 +584,45 @@ func (s *Store) SetCredentials(ctx context.Context, stationID string, key []byte
 func (s *Store) GetCredentials(ctx context.Context, stationID string, key []byte) (string, error) {
 	var ct, nonce []byte
 	err := s.db.QueryRowContext(ctx, "SELECT ciphertext, nonce FROM credentials WHERE station_id=?", stationID).Scan(&ct, &nonce)
+	if err != nil {
+		return "", err
+	}
+	pt, err := secrets.Decrypt(key, ct, nonce)
+	if err != nil {
+		return "", err
+	}
+	return string(pt), nil
+}
+
+// NotifierConfigID is the single row key used for the encrypted notifier blob.
+const NotifierConfigID = "notifiers"
+
+// SetNotifierConfig encrypts and stores the JSON notifier config (upsert).
+// Returns ErrEncryptionDisabled if key is nil (no TRANSMONITOR_ENCRYPTION_KEY).
+func (s *Store) SetNotifierConfig(ctx context.Context, id string, key []byte, plaintext string) error {
+	if key == nil {
+		return ErrEncryptionDisabled
+	}
+	ct, nonce, err := secrets.Encrypt(key, []byte(plaintext))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO notifier_config (id, ciphertext, nonce, updated_at) VALUES (?,?,?,CURRENT_TIMESTAMP)
+		 ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext, nonce=excluded.nonce, updated_at=CURRENT_TIMESTAMP`,
+		id, ct, nonce)
+	return err
+}
+
+// GetNotifierConfig decrypts and returns the stored notifier config JSON.
+// Returns ("", sql.ErrNoRows) when none is stored, and ErrEncryptionDisabled
+// when key is nil.
+func (s *Store) GetNotifierConfig(ctx context.Context, id string, key []byte) (string, error) {
+	if key == nil {
+		return "", ErrEncryptionDisabled
+	}
+	var ct, nonce []byte
+	err := s.db.QueryRowContext(ctx, "SELECT ciphertext, nonce FROM notifier_config WHERE id=?", id).Scan(&ct, &nonce)
 	if err != nil {
 		return "", err
 	}

@@ -7,6 +7,7 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"transitmonitor/internal/alert"
 	"transitmonitor/internal/changedet"
 	"transitmonitor/internal/domain"
+	"transitmonitor/internal/jwtlogin"
 	"transitmonitor/internal/probe"
 	"transitmonitor/internal/store"
 )
@@ -35,6 +37,8 @@ type Scheduler struct {
 	EncKey      []byte       // for at-rest credential persistence on AddStation
 	Client      *http.Client // for building adapters at runtime
 
+	baseNotifierCfg alert.NotifierConfig // YAML-derived floor; DB overrides merge on top
+
 	mu                    sync.Mutex
 	runCtx                context.Context
 	cancels               map[string]context.CancelFunc
@@ -43,6 +47,10 @@ type Scheduler struct {
 	cooldown              time.Duration
 	lastAlert             map[string]time.Time
 	alertMu               sync.Mutex
+
+	failMu      sync.Mutex
+	failStreak  map[string]int  // consecutive poll failures per station
+	authOK      map[string]bool // last known auth state per station (true = OK)
 }
 
 // New constructs a scheduler with defaults.
@@ -53,6 +61,8 @@ func New(stations []domain.Station, adapters map[string]adapter.Adapter, st *sto
 		cancels:               map[string]context.CancelFunc{},
 		cooldown:              30 * time.Minute,
 		lastAlert:             map[string]time.Time{},
+		failStreak:            map[string]int{},
+		authOK:                map[string]bool{},
 		snapshotRetentionDays: 7, obsRetentionDays: 30,
 	}
 }
@@ -99,6 +109,89 @@ func (s *Scheduler) shouldFire(ev alert.AlertEvent) bool {
 	}
 	s.lastAlert[key] = s.Now()
 	return true
+}
+
+// rulesOfType returns the enabled rules of a given type. endpoint_auth_failed
+// and poll_failure_streak rules are emitted directly by the scheduler (not by
+// alert.Evaluate), so it looks them up here.
+func (s *Scheduler) rulesOfType(typ string) []alert.Rule {
+	var out []alert.Rule
+	for _, r := range s.Rules {
+		if r.Enabled && r.Type == typ {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// dispatchAlert sends one AlertEvent through the notifier and records it in the
+// store (sent flag + error), honoring the cooldown dedup. Shared by the change
+// / probe paths and the direct endpoint_auth_failed / poll_failure_streak path.
+func (s *Scheduler) dispatchAlert(ctx context.Context, ev alert.AlertEvent) {
+	if s.Notifier == nil {
+		return
+	}
+	if !s.shouldFire(ev) {
+		return
+	}
+	sendErr := s.Notifier.Send(ctx, ev)
+	payload, _ := json.Marshal(ev.Payload)
+	_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
+}
+
+// recordPollSuccess resets the consecutive-failure streak and marks the station
+// auth-OK. Called after FetchRatios succeeds.
+func (s *Scheduler) recordPollSuccess(stationID string) {
+	s.failMu.Lock()
+	defer s.failMu.Unlock()
+	s.failStreak[stationID] = 0
+	s.authOK[stationID] = true
+}
+
+// recordPollFailure handles a failed scrape: increments the streak, emits
+// endpoint_auth_failed (on an OK→failed auth flip) and poll_failure_streak
+// (when streak crosses a rule's threshold) alerts. Errors here must not mask
+// the returned fetch error.
+func (s *Scheduler) recordPollFailure(ctx context.Context, stationID string, err error) {
+	now := s.Now()
+	isAuth := errors.Is(err, domain.ErrAuthFailed)
+
+	s.failMu.Lock()
+	s.failStreak[stationID]++
+	streak := s.failStreak[stationID]
+	wasOK := s.authOK[stationID]
+	if isAuth {
+		s.authOK[stationID] = false
+	}
+	s.failMu.Unlock()
+
+	// endpoint_auth_failed: fire only on the OK→failed transition (not every
+	// failed poll), so a persistently-broken station alerts once, not per-poll.
+	if isAuth && wasOK {
+		for _, r := range s.rulesOfType(alert.RuleEndpointAuthFail) {
+			s.dispatchAlert(ctx, alert.AlertEvent{
+				Rule: r.Name, StationID: stationID, Severity: "critical",
+				Payload:   map[string]any{"status": "auth_failed", "error": err.Error(), "observed_at": now},
+				CreatedAt: now,
+			})
+		}
+	}
+
+	// poll_failure_streak: fire when the streak reaches (or first crosses) the
+	// threshold. Equal-to check fires exactly once per threshold crossing.
+	for _, r := range s.rulesOfType(alert.RulePollFailureStreak) {
+		threshold := int(r.Threshold)
+		if threshold <= 0 {
+			threshold = 1
+		}
+		if streak == threshold {
+			s.dispatchAlert(ctx, alert.AlertEvent{
+				Rule: r.Name, StationID: stationID, Severity: "critical",
+				Payload:   map[string]any{"streak": streak, "error": err.Error(), "threshold": threshold, "observed_at": now},
+				CreatedAt: now,
+			})
+		}
+	}
 }
 
 // Stations returns a snapshot of the current station list (thread-safe).
@@ -192,18 +285,22 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 	if a == nil {
 		return fmt.Errorf("unknown station %s", stationID)
 	}
+	s.maybeRefreshJWT(ctx, &stn, a)
 	prev, err := s.Store.PrevPollObservations(ctx, stationID)
 	if err != nil {
 		return err
 	}
 	caps, err := a.ProbeCapabilities(ctx)
 	if err != nil {
+		s.recordPollFailure(ctx, stationID, err)
 		return fmt.Errorf("probe capabilities: %w", err)
 	}
 	snap, obs, err := a.FetchRatios(ctx, caps)
 	if err != nil {
+		s.recordPollFailure(ctx, stationID, err)
 		return fmt.Errorf("fetch ratios: %w", err)
 	}
+	s.recordPollSuccess(stationID)
 	t := s.Now()
 	// Fetch previous group ratios BEFORE inserting the new snapshot, so the
 	// group-ratio diff compares against the prior state (not the just-written one).
@@ -234,12 +331,7 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 	}
 	if s.Notifier != nil {
 		for _, ev := range alert.Evaluate(s.Rules, events, nil) {
-			if !s.shouldFire(ev) {
-				continue
-			}
-			sendErr := s.Notifier.Send(ctx, ev)
-			payload, _ := json.Marshal(ev.Payload)
-			_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
+			s.dispatchAlert(ctx, ev)
 		}
 	}
 	if caps.HasQuota {
@@ -268,12 +360,7 @@ func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs 
 			pres.Model, pres.TokensIn, pres.TokensOut, pres.MarkupPct, pres.CostUSD, pres.DeclaredUnavailable, pres.Error))
 	if s.Notifier != nil {
 		for _, ev := range alert.Evaluate(s.Rules, nil, []domain.ProbeResult{pres}) {
-			if !s.shouldFire(ev) {
-				continue
-			}
-			sendErr := s.Notifier.Send(ctx, ev)
-			payload, _ := json.Marshal(ev.Payload)
-			_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
+			s.dispatchAlert(ctx, ev)
 		}
 	}
 }
@@ -362,7 +449,159 @@ func errStr(err error) string {
 	return ""
 }
 
+const jwtRefreshMargin = 5 * time.Minute
+
+// maybeRefreshJWT auto-refreshes the JWT for sub2api stations that have
+// admin_email + admin_pass configured. Skipped if the current JWT is still fresh.
+func (s *Scheduler) maybeRefreshJWT(ctx context.Context, stn *domain.Station, a adapter.Adapter) {
+	if stn.Kind != domain.KindSub2API || stn.Auth.AdminEmail == "" || stn.Auth.AdminPass == "" {
+		return
+	}
+	if !jwtlogin.NeedsRefresh(stn.Auth.JWT, jwtRefreshMargin, s.Now()) {
+		return
+	}
+	client := s.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	token, exp, err := jwtlogin.Login(ctx, stn.BaseURL, stn.Auth.AdminEmail, stn.Auth.AdminPass, client)
+	if err != nil {
+		s.logger().Warn("jwt auto-refresh failed", "station", stn.ID, "err", err)
+		return
+	}
+	s.logger().Info("jwt auto-refreshed", "station", stn.ID, "expires", exp)
+	if jr, ok := a.(adapter.JWTRefresher); ok {
+		jr.SetJWT(token)
+	}
+	s.mu.Lock()
+	for i, x := range s.stationList {
+		if x.ID == stn.ID {
+			s.stationList[i].Auth.JWT = token
+			*stn = s.stationList[i]
+			break
+		}
+	}
+	s.mu.Unlock()
+	if s.EncKey != nil && s.Store != nil {
+		_ = s.Store.UpsertStation(ctx, *stn, s.EncKey)
+	}
+}
+
 // PollNow triggers an immediate poll for a station (used by the dashboard "refresh" button).
 func (s *Scheduler) PollNow(stationID string) error {
 	return s.PollOnce(context.Background(), stationID)
+}
+
+// SetBaseNotifierConfig records the YAML-derived notifier config as the floor
+// that DB overrides merge on top of. Called once from main at startup.
+func (s *Scheduler) SetBaseNotifierConfig(nc alert.NotifierConfig) {
+	s.baseNotifierCfg = nc
+}
+
+// mergedNotifierConfig returns base ⊕ DB (DB non-empty fields win), with real
+// secrets. On missing row / encryption disabled, returns the base config.
+func (s *Scheduler) mergedNotifierConfig(ctx context.Context) alert.NotifierConfig {
+	nc := s.baseNotifierCfg
+	if s.EncKey == nil || s.Store == nil {
+		return nc
+	}
+	blob, err := s.Store.GetNotifierConfig(ctx, store.NotifierConfigID, s.EncKey)
+	if err != nil || blob == "" {
+		return nc // missing/disabled → base (YAML) is authoritative
+	}
+	var db alert.NotifierConfig
+	if json.Unmarshal([]byte(blob), &db) != nil {
+		return nc
+	}
+	mergeNonEmpty(&nc.DingTalk.Webhook, db.DingTalk.Webhook)
+	mergeNonEmpty(&nc.DingTalk.Secret, db.DingTalk.Secret)
+	mergeNonEmpty(&nc.Webhook.URL, db.Webhook.URL)
+	mergeNonEmpty(&nc.Lark.Webhook, db.Lark.Webhook)
+	mergeNonEmpty(&nc.Lark.Secret, db.Lark.Secret)
+	mergeNonEmpty(&nc.Slack.Webhook, db.Slack.Webhook)
+	mergeNonEmpty(&nc.QQ.AppID, db.QQ.AppID)
+	mergeNonEmpty(&nc.QQ.AppSecret, db.QQ.AppSecret)
+	mergeNonEmpty(&nc.QQ.GroupOpenID, db.QQ.GroupOpenID)
+	return nc
+}
+
+func mergeNonEmpty(dst *string, src string) {
+	if src != "" {
+		*dst = src
+	}
+}
+
+// ReloadNotifiers rebuilds the live notifier from base ⊕ DB and swaps it in.
+// Called at startup and after the /settings page saves.
+func (s *Scheduler) ReloadNotifiers(ctx context.Context) error {
+	nc := s.mergedNotifierConfig(ctx)
+	client := s.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	s.alertMu.Lock()
+	s.Notifier = alert.BuildDispatcher(nc, client)
+	// A config change should let stale auth-failure / streak alerts re-fire.
+	s.lastAlert = map[string]time.Time{}
+	s.alertMu.Unlock()
+	return nil
+}
+
+// SaveNotifierConfig persists the incoming notifier config (preserving existing
+// secrets where the incoming field is blank — keep-blank contract), then
+// reloads. Returns ErrEncryptionDisabled when no encryption key is set.
+func (s *Scheduler) SaveNotifierConfig(ctx context.Context, incoming alert.NotifierConfig) error {
+	if s.EncKey == nil {
+		return store.ErrEncryptionDisabled
+	}
+	cur := s.mergedNotifierConfig(ctx)
+	// Merge: incoming non-empty wins; blank secret fields keep current.
+	incoming.DingTalk.Secret = orBlank(incoming.DingTalk.Secret, cur.DingTalk.Secret)
+	incoming.Lark.Secret = orBlank(incoming.Lark.Secret, cur.Lark.Secret)
+	incoming.QQ.AppSecret = orBlank(incoming.QQ.AppSecret, cur.QQ.AppSecret)
+	blob, err := json.Marshal(incoming)
+	if err != nil {
+		return err
+	}
+	if err := s.Store.SetNotifierConfig(ctx, store.NotifierConfigID, s.EncKey, string(blob)); err != nil {
+		return err
+	}
+	return s.ReloadNotifiers(ctx)
+}
+
+func orBlank(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
+// NotifierConfigs returns the merged config for the /settings form, with
+// secrets blanked (keep-blank semantics); URLs / AppID / GroupOpenID shown
+// in full. Encryption-disabled status is conveyed by the caller via encKey.
+func (s *Scheduler) NotifierConfigs(ctx context.Context) alert.NotifierConfig {
+	nc := s.mergedNotifierConfig(ctx)
+	nc.DingTalk.Secret = ""
+	nc.Lark.Secret = ""
+	nc.QQ.AppSecret = ""
+	return nc
+}
+
+// SendTestAlert fires a sample alert through the current notifier and records
+// the result as an alert_event row (so it shows on /alerts). Returns nil on
+// successful send, else the send error.
+func (s *Scheduler) SendTestAlert(ctx context.Context, kind string) error {
+	now := s.Now()
+	ev := alert.AlertEvent{
+		Rule: "test", StationID: kind, Model: kind, Severity: "info",
+		Payload:   map[string]any{"kind": kind, "source": "settings", "observed_at": now},
+		CreatedAt: now,
+	}
+	if s.Notifier == nil {
+		return errors.New("no notifier configured")
+	}
+	sendErr := s.Notifier.Send(ctx, ev)
+	payload, _ := json.Marshal(ev.Payload)
+	_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
+	return sendErr
 }

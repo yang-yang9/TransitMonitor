@@ -57,6 +57,7 @@
 ### 鉴权
 - sk-key：`Authorization: Bearer <sk>` 或 `x-api-key`/`x-goog-api-key`（`middleware/api_key_auth.go:58-83`）；`?key=`/`?api_key=` 已废弃→400（`:50-54`）。
 - admin：`x-api-key: <admin-api-key>`（存 settings 表非 env，`middleware/admin_auth.go:127` `GetAdminAPIKey`）或 `Authorization: Bearer <admin-jwt>`（env `ADMIN_EMAIL/ADMIN_PASSWORD`+`JWT_SECRET`，见 `deploy/.env.example:196-209`）。
+- 用户登录：`POST /auth/login` body `{"email":"...","password":"..."}` → `{"token":"<jwt>"}` (JWT 含 `exp` claim)。`/auth/login/2fa` 用于 2FA 场景。`/auth/login`、`/auth/register`、`/auth/send-verify-code` 有服务端限流。TransitMonitor 用此端点自动获取/刷新 JWT。
 
 ### 探测信号
 - `GET /v1/usage`（sk-key，`routes/gateway.go:159`）→ `{today/total:{cost, actual_cost, input_tokens, output_tokens, total_tokens}}`；`actual_cost` 已含倍率+peak。

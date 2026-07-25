@@ -131,6 +131,10 @@ func main() {
 	sched.SetLogger(logger)
 	sched.SetEncKey(encKey)
 	sched.SetClient(httpClient)
+	sched.SetBaseNotifierConfig(alertNotifierConfig(cfg.Alerts))
+	if err := sched.ReloadNotifiers(context.Background()); err != nil {
+		logger.Warn("notifier reload", "err", err)
+	}
 	sched.Prober = probe.NewProber(httpClient)
 
 	_ = st.InsertAuditLog(context.Background(), "main", "startup", "",
@@ -157,6 +161,7 @@ func main() {
 	}
 	dash := dashboard.New(stations, st, cfg.Dashboard.Token)
 	dash.SetManager(sched) // enables web CRUD (add/remove stations at runtime)
+	dash.SetEncKey(encKey) // enables /settings notifier-secret persistence
 	go func() {
 		logger.Info("dashboard", "addr", dashAddr)
 		if err := dash.ListenAndServe(dashAddr); err != nil && err != http.ErrServerClosed {
@@ -191,23 +196,24 @@ func main() {
 }
 
 func buildNotifier(cfg *config.File) alert.Notifier {
-	var ns []alert.Notifier
-	if cfg.Alerts.DingTalk.Webhook != "" {
-		ns = append(ns, alert.NewDingTalk(cfg.Alerts.DingTalk.Webhook, cfg.Alerts.DingTalk.Secret, http.DefaultClient))
-	}
-	if cfg.Alerts.Webhook.URL != "" {
-		ns = append(ns, &alert.WebhookNotifier{URL: cfg.Alerts.Webhook.URL})
-	}
-	if cfg.Alerts.Lark.Webhook != "" {
-		ns = append(ns, alert.NewLark(cfg.Alerts.Lark.Webhook, cfg.Alerts.Lark.Secret, http.DefaultClient))
-	}
-	if cfg.Alerts.Slack.Webhook != "" {
-		ns = append(ns, &alert.SlackNotifier{WebhookURL: cfg.Alerts.Slack.Webhook})
-	}
-	if len(ns) == 0 {
-		return nil
-	}
-	return &alert.Dispatcher{Notifiers: ns}
+	return alert.BuildDispatcher(alertNotifierConfig(cfg.Alerts), http.DefaultClient)
+}
+
+// alertNotifierConfig converts the YAML AlertsConfig (anonymous nested structs)
+// into the JSON-serializable alert.NotifierConfig used by BuildDispatcher and
+// the /settings page.
+func alertNotifierConfig(a config.AlertsConfig) alert.NotifierConfig {
+	var nc alert.NotifierConfig
+	nc.DingTalk.Webhook = a.DingTalk.Webhook
+	nc.DingTalk.Secret = a.DingTalk.Secret
+	nc.Webhook.URL = a.Webhook.URL
+	nc.Lark.Webhook = a.Lark.Webhook
+	nc.Lark.Secret = a.Lark.Secret
+	nc.Slack.Webhook = a.Slack.Webhook
+	nc.QQ.AppID = a.QQ.AppID
+	nc.QQ.AppSecret = a.QQ.AppSecret
+	nc.QQ.GroupOpenID = a.QQ.GroupOpenID
+	return nc
 }
 
 func newLogger() *slog.Logger {

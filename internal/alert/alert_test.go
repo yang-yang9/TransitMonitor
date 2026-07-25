@@ -167,6 +167,120 @@ func TestSinkNotifier(t *testing.T) {
 	}
 }
 
+func TestQQNotifier_Send(t *testing.T) {
+	tokenHits := 0
+	var sendAuth, sendPath, sendCT string
+	var sendBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/getAppAccessToken":
+			tokenHits++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"TOK123","expires_in":7200}`))
+		default: // "/v2/groups/{id}/messages"
+			sendAuth = r.Header.Get("Authorization")
+			sendPath = r.URL.Path
+			sendCT = r.Header.Get("Content-Type")
+			b, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(b, &sendBody)
+			w.WriteHeader(200)
+		}
+	}))
+	defer srv.Close()
+	qqTokenURL = srv.URL + "/app/getAppAccessToken"
+	qqBaseURL = srv.URL
+
+	q := NewQQ("app-1", "secret-1", "group-openid-x", srv.Client())
+	q.SetClock(func() time.Time { return alertTime })
+	ev := AlertEvent{Rule: "price-up", StationID: "s1", Model: "gpt-4o", Severity: "critical", Payload: map[string]any{"delta_pct": 25}}
+	if err := q.Send(context.Background(), ev); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if sendAuth != "QQBot TOK123" {
+		t.Errorf("Authorization: want %q got %q", "QQBot TOK123", sendAuth)
+	}
+	if sendCT != "application/json" {
+		t.Errorf("content-type: %s", sendCT)
+	}
+	if !contains(sendPath, "/v2/groups/group-openid-x/messages") {
+		t.Errorf("send path: %s", sendPath)
+	}
+	if mt, _ := sendBody["msg_type"].(float64); mt != 0 {
+		t.Errorf("msg_type: want 0 got %v", sendBody["msg_type"])
+	}
+	if c, _ := sendBody["content"].(string); !contains(c, "price-up") {
+		t.Errorf("content missing rule name: %q", c)
+	}
+	// token cached across two sends within expiry → only one token call.
+	if err := q.Send(context.Background(), ev); err != nil {
+		t.Fatalf("send2: %v", err)
+	}
+	if tokenHits != 1 {
+		t.Errorf("token cached: want 1 token call got %d", tokenHits)
+	}
+}
+
+func TestQQNotifier_401Retry(t *testing.T) {
+	tokenHits := 0
+	sendHits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/getAppAccessToken":
+			tokenHits++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"TOK","expires_in":7200}`))
+		default:
+			sendHits++
+			if sendHits == 1 {
+				w.WriteHeader(401) // stale token → retry
+				return
+			}
+			w.WriteHeader(200)
+		}
+	}))
+	defer srv.Close()
+	qqTokenURL = srv.URL + "/app/getAppAccessToken"
+	qqBaseURL = srv.URL
+
+	q := NewQQ("app", "secret", "grp", srv.Client())
+	q.SetClock(func() time.Time { return alertTime })
+	if err := q.Send(context.Background(), AlertEvent{Rule: "r"}); err != nil {
+		t.Fatalf("send after 401 retry: %v", err)
+	}
+	if tokenHits != 2 {
+		t.Errorf("401 should force a token refresh: want 2 token calls got %d", tokenHits)
+	}
+	if sendHits != 2 {
+		t.Errorf("401 should retry send once: want 2 send calls got %d", sendHits)
+	}
+}
+
+func TestBuildDispatcher(t *testing.T) {
+	// No notifiers → nil.
+	if got := BuildDispatcher(NotifierConfig{}, http.DefaultClient); got != nil {
+		t.Errorf("empty config should yield nil dispatcher, got %T", got)
+	}
+	var nc NotifierConfig
+	nc.DingTalk.Webhook = "https://oapi.dingtalk.com/x"
+	nc.QQ.AppID, nc.QQ.AppSecret, nc.QQ.GroupOpenID = "a", "b", "c"
+	d := BuildDispatcher(nc, http.DefaultClient)
+	dp, ok := d.(*Dispatcher)
+	if !ok {
+		t.Fatalf("want *Dispatcher got %T", d)
+	}
+	// 2 notifiers (dingtalk + qq); slack/lark/webhook empty → skipped.
+	if len(dp.Notifiers) != 2 {
+		t.Errorf("want 2 notifiers got %d", len(dp.Notifiers))
+	}
+	// Partial QQ config (missing group_openid) → qq skipped → only dingtalk.
+	nc.QQ.GroupOpenID = ""
+	d2 := BuildDispatcher(nc, http.DefaultClient)
+	dp2, _ := d2.(*Dispatcher)
+	if len(dp2.Notifiers) != 1 {
+		t.Errorf("partial qq should be skipped: want 1 got %d", len(dp2.Notifiers))
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

@@ -5,9 +5,17 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
+
+// ErrAuthFailed is wrapped by an adapter's FetchRatios when a previously-OK
+// authenticated endpoint returns 401/403 (bad/expired key). The scheduler
+// matches it with errors.Is to emit an endpoint_auth_failed alert. It lives in
+// domain (not the adapter package) to avoid an import cycle: adapter imports
+// the newapi/sub2api subpackages, which would otherwise have to import adapter.
+var ErrAuthFailed = errors.New("endpoint auth failed")
 
 // StationKind identifies the upstream relay-station implementation.
 type StationKind string

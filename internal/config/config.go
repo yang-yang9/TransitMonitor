@@ -17,7 +17,7 @@ import (
 // File is the top-level config.
 type File struct {
 	DB        DBConfig         `yaml:"db"`
-	Timezone string           `yaml:"timezone"` // display/audit timezone, e.g. "Asia/Shanghai" (default); "" → Asia/Shanghai
+	Timezone  string           `yaml:"timezone"` // display/audit timezone, e.g. "Asia/Shanghai" (default); "" → Asia/Shanghai
 	Stations  []domain.Station `yaml:"stations"`
 	Alerts    AlertsConfig     `yaml:"alerts"`
 	Dashboard DashboardConfig  `yaml:"dashboard"`
@@ -43,6 +43,11 @@ type AlertsConfig struct {
 	Slack struct {
 		Webhook string `yaml:"webhook"`
 	} `yaml:"slack"`
+	QQ struct {
+		AppID       string `yaml:"app_id"`
+		AppSecret   string `yaml:"app_secret"`
+		GroupOpenID string `yaml:"group_openid"`
+	} `yaml:"qq"`
 }
 
 type DashboardConfig struct {
