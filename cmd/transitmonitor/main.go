@@ -36,6 +36,7 @@ import (
 	"transitmonitor/internal/scheduler"
 	"transitmonitor/internal/secrets"
 	"transitmonitor/internal/store"
+	"transitmonitor/internal/updater"
 )
 
 // version is overridable at build time via -ldflags "-X main.version=...".
@@ -202,6 +203,23 @@ func main() {
 	dash := dashboard.New(stations, st, cfg.Dashboard.Token)
 	dash.SetManager(sched) // enables web CRUD (add/remove stations at runtime)
 	dash.SetEncKey(encKey) // enables /settings notifier-secret persistence
+	dash.SetVersion(version)
+	// In-panel update / rollback (sub2api-style). Release builds only — a
+	// `make build` (version 0.1.0-dev) still checks for updates but should not
+	// be self-updated into. The pre-restart hook flushes SQLite WAL and stops
+	// the HTTP server before syscall.Exec replaces the process image.
+	upd, err := updater.New(version, "", "", os.Getenv("TRANSMONITOR_UPDATE_GITHUB_TOKEN"))
+	if err != nil {
+		logger.Warn("updater init failed; in-panel update disabled", "err", err)
+	} else {
+		upd.SetPreRestart(func() error {
+			shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = dash.Shutdown(shutCtx)
+			return st.Close()
+		})
+		dash.SetUpdater(upd)
+	}
 	go func() {
 		logger.Info("dashboard", "addr", dashAddr)
 		if err := dash.ListenAndServe(dashAddr); err != nil && err != http.ErrServerClosed {

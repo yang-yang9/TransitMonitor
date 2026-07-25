@@ -210,14 +210,22 @@ func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityRepor
 	}
 
 	// /api/user/self (PAT) — quota/balance.
+	// new-api semantics (verified against controller/user.go GetSelf +
+	// model/user.go): `quota` is the user's REMAINING prepaid balance (decremented
+	// per request via DecreaseUserQuota, topped up via IncreaseUserQuota);
+	// `used_quota` is the CUMULATIVE consumed amount (monotonic). So remaining =
+	// quota, used = used_quota, and there is no fixed limit (a prepaid wallet has
+	// no ceiling), so Total stays 0. GetSelf does not return unlimited_quota, so
+	// unlimited new-api users (quota not decremented) are indistinguishable from a
+	// normal wallet here — an edge case, documented rather than worked around.
 	if a.PAT != "" {
 		if status, body, err := a.doGet(ctx, "/api/user/self", a.PAT); err == nil && status == 200 {
 			var us userSelfResp
 			if json.Unmarshal(body, &us) == nil {
 				caps.HasQuota = true
-				caps.QuotaTotal = us.Data.Quota
-				caps.QuotaRemaining = us.Data.Quota - us.Data.UsedQuota
+				caps.QuotaRemaining = us.Data.Quota
 				caps.QuotaUsed = us.Data.UsedQuota
+				caps.QuotaTotal = 0
 			}
 		}
 	}

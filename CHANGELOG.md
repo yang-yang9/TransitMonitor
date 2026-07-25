@@ -23,6 +23,8 @@
 - SDD (openspec spec-driven) + TDD (12 packages, race-clean)
 - Real-cost probe (new-api usage-delta + sub2api actual_cost-delta → markup reconciliation)
 - DingTalk HMAC-signed + generic webhook notifiers
+- In-panel "立即更新 / 回退" (sub2api-style self-update): /system page + /api/system/{version,check-updates,rollback-versions,upgrade,rollback,restart}. Polls GitHub Releases (20min cache), downloads the platform archive + checksums.txt, verifies SHA256, extracts with Zip-Slip guard, atomically swaps the binary. Bare-binary restart via syscall.Exec; Docker restart via wrapper entrypoint + /data/bin + supervisor. Local manifest retains 3 rollback versions. SSRF guard on download hosts; detached 15min context so a browser disconnect mid-download never aborts the swap. Optional TRANSMONITOR_UPDATE_GITHUB_TOKEN raises API rate limits.
+- Release pipeline: .github/workflows/release.yml publishes per-platform tar.gz + checksums.txt to GitHub Releases on every `v*` tag; docker.yml now injects `VERSION=<tag>` so the released image reports its real version (was `dev`). Dockerfile gained a wrapper entrypoint (scripts/entrypoint.sh) that routes to /data/bin/transitmonitor when an in-panel update placed one there, surviving container recreation.
 
 ### Changed
 - UI: professional form design (field-label, toggle switch, button hierarchy, card hover)

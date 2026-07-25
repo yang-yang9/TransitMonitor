@@ -56,6 +56,8 @@ docker run -d -p 7421:7421 --name transitmonitor \
 #   -e TRANSMONITOR_DASHBOARD_TOKEN=secret transitmonitor:latest
 # 或一键：TRANSMONITOR_DASHBOARD_TOKEN=secret docker compose up -d
 curl -H "Authorization: Bearer secret" http://localhost:7421/api/stations
+# 浏览器打开 http://localhost:7421  → 概览/矩阵/变更/探测/审计/告警/站点/设置/系统
+# 「系统」页可在面板内点「立即更新」升级到最新 Release、回退到上一版本（sub2api 风格，仅 Release 构建可自更新；Docker 需 v0.0.2+ 含 wrapper 的镜像）。
 ```
 多架构镜像（amd64+arm64）：CI 在 `v*` tag 时自动 buildx push `ghcr.io/yang-yang9/transitmonitor:<tag>` + `:latest`。
 ⚠ 容器绑定 `0.0.0.0:7421`，**必须设 `TRANSMONITOR_DASHBOARD_TOKEN`** 才能外部访问（`/healthz` 免鉴权）。

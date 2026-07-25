@@ -153,6 +153,23 @@ docker pull ghcr.io/yang-yang9/transitmonitor:v0.0.1   # 或 :latest 跟最新
 ## 10. 备份 / 迁移
 SQLite 单文件 `transitmonitor.db`（+ `-wal`/`-shm`）。停服后复制即可。Docker：数据在 `tm-data` 卷 / `/data`。
 
+## 9b. 在面板内更新 / 回退（sub2api 风格）
+打开 `/system` 页（导航栏「系统」）即可看到当前版本、最新 Release、回退候选与三个按钮：**立即更新** / **回退** / **重启**。
+
+工作原理（仿 sub2api）：
+- 点击「立即更新」→ 后端打 `api.github.com/repos/yang-yang9/TransitMonitor/releases/latest`（20 分钟缓存，可 `?force=true` 强制刷新），下载对应 `linux_amd64`/`linux_arm64` 的 tar.gz + `checksums.txt`，校验 SHA256，从 tar.gz 解出 `transitmonitor` 二进制（Zip-Slip 守卫），**原子 rename** 换盘（旧二进制按版本号归档为回退候选，保留最近 3 份）。完成后返回 `need_restart:true`。
+- 点击「重启」→ 裸二进制模式用 `syscall.Exec` 原地替换进程映像（保留 PID，Exec 前先 flush+close SQLite WAL）；Docker 模式 `os.Exit(0)`，由 `restart: unless-stopped` + wrapper entrypoint 重新拉起。wrapper 优先 exec `/data/bin/transitmonitor`（面板更新写入的持久路径），没有则回退镜像内 `/app/transitmonitor`——**这样新二进制活过容器重建**。
+- 「回退」下拉选一个本地归档版本 → 恢复该二进制并提示重启。
+
+前置条件与注意事项：
+- **仅 Release 构建可自更新**：`make build` 产物 version=`0.1.0-dev`，会被当作比任何 tag 都旧（`dev` 在版本比较里等于 0.0.0），所以仍能提示有新版本；但自更新建议跑 Release 资产。
+- **Docker 用户需先拉一次含 wrapper 的镜像（v0.0.2+）**。v0.0.1 镜像没有 wrapper，面板内更新后容器重建会回退到旧镜像二进制——`/system` 页会检测 wrapper 是否就位，未就位时禁用「立即更新」并提示重新拉镜像。
+- 下载校验：仅允许 `github.com` / `*.githubusercontent.com` 的 HTTPS（SSRF 守卫），`io.LimitReader` 500MB 上限。
+- 可选环境变量：`TRANSMONITOR_UPDATE_GITHUB_TOKEN`（GitHub Bearer，提高 API 速率限制，仅发给 `api.github.com`）；`HTTP_PROXY`/`HTTPS_PROXY`（Go 默认支持，内网访问 GitHub 走代理出口）。
+- 裸二进制模式下回退备份落在二进制同目录的 `.transitmonitor-backups/`；Docker 模式落在 `/data/.updates/backup/`。
+
+API：`GET /api/system/version`、`GET /api/system/check-updates[?force=true]`、`GET /api/system/rollback-versions`、`POST /api/system/upgrade`、`POST /api/system/rollback`（body 可选 `{"version":"x.y.z"}`）、`POST /api/system/restart`。均受 dashboard 鉴权保护（token / localhost / `TRANSMONITOR_DASHBOARD_PUBLIC`）。
+
 ## 11. 安全
 - 凭据 `AuthConfig` 字段 `json:"-"`，dashboard 响应/日志经 `secrets.Redact` 掩码（`sk-***`）。
 - 设 `TRANSMONITOR_ENCRYPTION_KEY` 后，启动时各站凭据 AES-GCM 加密写入 `credentials` 表（明文不入库）。

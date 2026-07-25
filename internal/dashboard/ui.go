@@ -196,6 +196,7 @@ tbody tr:last-child td{border-bottom:0}
 tbody tr{transition:background .1s}
 tbody tr:hover{background:var(--row)}
 .mono{font-family:var(--mono)}.num{text-align:right;white-space:nowrap}
+.cell-grp{display:block;font-size:.68rem;line-height:1.1;color:var(--muted);font-weight:400;font-family:var(--mono);margin-top:.05rem}
 
 /* ── pager ── */
 .pager{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;padding:.7rem .3rem .2rem}
@@ -333,6 +334,7 @@ var navItems = []navItem{
 	{"/alerts", "", "alerts"},
 	{"/stations", "", "stations"},
 	{"/settings", "", "settings"},
+	{"/system", "", "system"},
 	{"/metrics", "", "metrics"},
 }
 

@@ -61,6 +61,12 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
+		// Skip unlimited stations: their remaining has no "low" meaning and the
+		// alert path (evaluateBalanceRules) skips them too. Emitting 0 would read
+		// as a depleted wallet to a `balance_remaining_usd < 1` alerter.
+		if ob.Unlimited {
+			continue
+		}
 		fmt.Fprintf(&b, "transitmonitor_balance_remaining_usd{station=%q} %v\n", st.ID, ob.RemainingUSD)
 	}
 	if isBrowser {
@@ -239,6 +245,11 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 	if field == "" {
 		field = "eff_in"
 	}
+	sortMode := r.URL.Query().Get("sort")
+	if sortMode == "" {
+		sortMode = "ratio"
+	}
+	group := r.URL.Query().Get("group")
 	sts := s.stationsList() // cache once — avoids index-out-of-range if the list changes between calls
 
 	// mode toggle (group × station is the default; model × station is the drill-down)
@@ -247,13 +258,15 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 	toggle += modeBtn("model", mode, lang, "btn.matrixmodel")
 	toggle += `</div>`
 
-	var tableHTML string
+	var tableHTML, subKey string
 	if mode == "model" {
-		tableHTML = s.matrixModelTable(lang, sts, field, model)
+		tableHTML = s.matrixModelTable(lang, sts, field, model, group)
+		subKey = "sub.matrixmodel"
 	} else {
-		tableHTML = s.matrixGroupTable(lang, sts)
+		tableHTML = s.matrixGroupTable(lang, sts, sortMode)
+		subKey = "sub.matrix"
 	}
-	body := `<div class="page-hdr"><h1>` + t(lang, "title.matrix") + `</h1><p class="sub">` + t(lang, "sub.matrix") + `</p></div>` +
+	body := `<div class="page-hdr"><h1>` + t(lang, "title.matrix") + `</h1><p class="sub">` + t(lang, subKey) + `</p></div>` +
 		toggle + tableHTML
 	writeHTMLShell(w, lang, t(lang, "title.matrix"), "matrix", body)
 }
@@ -268,8 +281,11 @@ func modeBtn(key, mode, lang, labelKey string) string {
 }
 
 // matrixGroupTable renders the group × station matrix: rows = union of groups,
-// columns = stations, cells = that group's ratio at that station.
-func (s *Server) matrixGroupTable(lang string, sts []domain.Station) string {
+// columns = stations, cells = that group's ratio at that station. Rows are
+// ordered by sortMode: "ratio" = median ratio across stations (cheapest first,
+// the default), "name" = alphabetical, "cov" = number of stations carrying the
+// group (most coverage first).
+func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode string) string {
 	type stGR struct {
 		name string
 		gr   map[string]float64
@@ -287,7 +303,50 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station) string {
 	for g := range groupSet {
 		groups = append(groups, g)
 	}
-	sort.Strings(groups)
+	// per-group stats: median ratio + coverage (how many stations carry it).
+	// Median (not mean) ignores outliers so a single wild station doesn't drag
+	// a group to the top/bottom — it reflects the group's typical discount.
+	type gStat struct {
+		median float64
+		cov    int
+	}
+	stats := map[string]gStat{}
+	for _, g := range groups {
+		vals := make([]float64, 0)
+		for _, r := range rows {
+			if v, ok := r.gr[g]; ok {
+				vals = append(vals, v)
+			}
+		}
+		sort.Float64s(vals)
+		var med float64
+		if n := len(vals); n > 0 {
+			if n%2 == 1 {
+				med = vals[n/2]
+			} else {
+				med = (vals[n/2-1] + vals[n/2]) / 2
+			}
+		}
+		stats[g] = gStat{median: med, cov: len(vals)}
+	}
+	switch sortMode {
+	case "name":
+		sort.Strings(groups)
+	case "cov":
+		sort.Slice(groups, func(i, j int) bool {
+			if stats[groups[i]].cov != stats[groups[j]].cov {
+				return stats[groups[i]].cov > stats[groups[j]].cov
+			}
+			return groups[i] < groups[j]
+		})
+	default: // "ratio" — median ascending; tie-break by name for a stable, predictable order
+		sort.SliceStable(groups, func(i, j int) bool {
+			if stats[groups[i]].median != stats[groups[j]].median {
+				return stats[groups[i]].median < stats[groups[j]].median
+			}
+			return groups[i] < groups[j]
+		})
+	}
 	// compute lo/hi across all present ratios for coloring
 	lo, hi := math.MaxFloat64, -math.MaxFloat64
 	for _, r := range rows {
@@ -306,7 +365,12 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station) string {
 	}
 	dataRows := make([][]string, 0, len(groups))
 	for _, g := range groups {
-		row := []string{`<span class="mono">` + esc(g) + `</span>`}
+		st := stats[g]
+		var tag string
+		if st.cov > 0 {
+			tag = ` <span class="cell-grp">` + fmt.Sprintf(t(lang, "meta.median_cov"), st.median, st.cov) + `</span>`
+		}
+		row := []string{`<span class="mono">` + esc(g) + `</span>` + tag}
 		for _, r := range rows {
 			v, ok := r.gr[g]
 			if !ok {
@@ -317,7 +381,22 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station) string {
 		}
 		dataRows = append(dataRows, row)
 	}
-	return renderTable(lang, cols, dataRows)
+	// sort-mode selector (group mode only)
+	sortSel := `<div class="field-sel">` + t(lang, "col.sort") + `: `
+	sortModes := []struct{ key, label string }{
+		{"ratio", t(lang, "sort.ratio")},
+		{"name", t(lang, "sort.name")},
+		{"cov", t(lang, "sort.cov")},
+	}
+	for _, sm := range sortModes {
+		cls := "btn btn-sm btn-outline"
+		if sm.key == sortMode {
+			cls = "btn btn-sm"
+		}
+		sortSel += fmt.Sprintf(`<a class="%s" href="/matrix?mode=group&sort=%s&_=%s">%s</a> `, cls, sm.key, matrixVer, sm.label)
+	}
+	sortSel += `</div>`
+	return sortSel + renderTable(lang, cols, dataRows)
 }
 
 // groupColorClass colors a group-ratio cell: low = cheap (green), high = expensive (orange).
@@ -336,17 +415,22 @@ func groupColorClass(v, lo, hi float64) string {
 	}
 }
 
-// matrixModelTable renders the model × station matrix (the original drill-down
-// view), keeping the cheapest group observation per model and a field selector.
-func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, modelFilter string) string {
+// matrixModelTable renders the model × station matrix. Each cell is one
+// (station, model) price. With no group selected (groupFilter=="") it shows each
+// station's cheapest non-sentinel group for that model and annotates the cell
+// with the source group name; with a specific group selected it shows that
+// group's price per station (— where the station lacks the model in that group).
+func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, modelFilter, groupFilter string) string {
 	ctx := context.Background()
 	type cell struct {
-		input, output float64
-		sentinel      string
-		has           bool
+		val      float64
+		sentinel string
+		group    string
+		has      bool
 	}
 	stCells := make([]map[string]cell, len(sts))
 	modelSet := map[string]bool{}
+	groupSet := map[string]bool{}
 	for i, st := range sts {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
 		m := map[string]cell{}
@@ -354,15 +438,22 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 			if modelFilter != "" && o.ModelName != modelFilter {
 				continue
 			}
+			groupSet[o.GroupName] = true
+			if groupFilter != "" && o.GroupName != groupFilter {
+				continue
+			}
 			v := fieldVal(field, o)
 			cur, ok := m[o.ModelName]
 			if !ok {
-				m[o.ModelName] = cell{v, 0, o.Sentinel, true}
+				m[o.ModelName] = cell{val: v, sentinel: o.Sentinel, group: o.GroupName, has: true}
 				modelSet[o.ModelName] = true
 				continue
 			}
-			if o.Sentinel == "" && (cur.sentinel != "" || v < cur.input) {
-				m[o.ModelName] = cell{v, 0, o.Sentinel, true}
+			// Collapse multiple groups to the cheapest non-sentinel. When a
+			// specific group is selected this branch is a no-op: LatestRatioObservations
+			// returns one row per (group, model), so there's nothing to displace.
+			if o.Sentinel == "" && (cur.sentinel != "" || v < cur.val) {
+				m[o.ModelName] = cell{val: v, sentinel: o.Sentinel, group: o.GroupName, has: true}
 			}
 		}
 		stCells[i] = m
@@ -378,11 +469,11 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 		for i := range sts {
 			c := stCells[i][m]
 			if c.has && c.sentinel == "" {
-				if c.input < lo {
-					lo = c.input
+				if c.val < lo {
+					lo = c.val
 				}
-				if c.input > hi {
-					hi = c.input
+				if c.val > hi {
+					hi = c.val
 				}
 			}
 		}
@@ -395,12 +486,18 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 			case c.sentinel != "":
 				row = append(row, statusBadge(lang, c.sentinel))
 			default:
-				row = append(row, fmt.Sprintf(`<span class="pcell %s">%s</span>`, priceColorClass(c.input, lo, hi), fmtCell(field, c.input)))
+				cellHTML := fmt.Sprintf(`<span class="pcell %s">%s</span>`, priceColorClass(c.val, lo, hi), fmtCell(field, c.val))
+				// In cheapest mode, label the source group so the price is attributable.
+				// (In specific-group mode the selector already states the group.)
+				if groupFilter == "" {
+					cellHTML += `<span class="cell-grp">` + esc(c.group) + `</span>`
+				}
+				row = append(row, cellHTML)
 			}
 		}
 		rows = append(rows, row)
 	}
-	// field selector (model mode only)
+	// field selector (model mode only) — preserves model + group across switches
 	fields := []struct{ key, label string }{
 		{"eff_in", t(lang, "col.effratio")},
 		{"eff_out", t(lang, "col.effout")},
@@ -420,10 +517,42 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 		if modelFilter != "" {
 			q += "&model=" + esc(modelFilter)
 		}
+		if groupFilter != "" {
+			q += "&group=" + esc(groupFilter)
+		}
 		selector += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, cls, q, f.label)
 	}
 	selector += `</div>`
-	return selector + renderTable(lang, cols, rows)
+	// group selector (model mode only) — "All (cheapest)" + one chip per group,
+	// preserving field + model. Lets the user compare one group's prices cross-station.
+	groups := make([]string, 0, len(groupSet))
+	for g := range groupSet {
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+	groupSel := `<div class="field-sel">` + t(lang, "col.group") + `: `
+	allCls := "btn btn-sm btn-outline"
+	if groupFilter == "" {
+		allCls = "btn btn-sm"
+	}
+	allQ := "?mode=model&field=" + field + "&_=" + matrixVer
+	if modelFilter != "" {
+		allQ += "&model=" + esc(modelFilter)
+	}
+	groupSel += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, allCls, allQ, t(lang, "btn.matrixallgroups"))
+	for _, g := range groups {
+		cls := "btn btn-sm btn-outline"
+		if g == groupFilter {
+			cls = "btn btn-sm"
+		}
+		q := "?mode=model&field=" + field + "&group=" + esc(g) + "&_=" + matrixVer
+		if modelFilter != "" {
+			q += "&model=" + esc(modelFilter)
+		}
+		groupSel += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, cls, q, esc(g))
+	}
+	groupSel += `</div>`
+	return groupSel + selector + renderTable(lang, cols, rows)
 }
 
 // fmtCell formats a matrix cell value according to the active field:
@@ -440,7 +569,7 @@ func fmtCell(field string, v float64) string {
 // matrixVer is a cache-busting version for matrix field-selector links.
 // Bump it whenever the matrix rendering changes so cached proxies/browsers
 // re-fetch instead of serving a stale ?field=… response.
-const matrixVer = "3"
+const matrixVer = "4"
 
 func fieldLabel(field, lang string) string {
 	switch field {
@@ -696,7 +825,7 @@ func (s *Server) balanceHTML(w http.ResponseWriter, r *http.Request) {
 			for _, h := range hist {
 				vals = append(vals, h.RemainingUSD)
 			}
-			spark = sparklineSVG(vals, 120, 32)
+			spark = sparklineSVG(vals, 120, 32, "$%.2f")
 		}
 		rows = append(rows, row{station: st.ID, name: st.Name, ob: ob, has: true, spark: spark})
 	}
@@ -752,7 +881,7 @@ func (s *Server) balanceHTML(w http.ResponseWriter, r *http.Request) {
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.balance") + `</h1><p class="sub">` + t(lang, "sub.balance") + `</p></div>` +
 		renderTable(lang, []string{
 			t(lang, "col.station"), t(lang, "col.remaining"), t(lang, "col.used"),
-			t(lang, "col.total"), t(lang, "col.lastupdate"), "source", t(lang, "balance.trend"),
+			t(lang, "col.total"), t(lang, "col.lastupdate"), t(lang, "col.source"), t(lang, "balance.trend"),
 		}, cells)
 	writeHTMLShell(w, lang, t(lang, "title.balance"), "balance", body)
 }

@@ -187,7 +187,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			for _, h := range hist {
 				vals = append(vals, h.RemainingUSD)
 			}
-			balSpark = sparklineSVG(vals, 240, 40)
+			balSpark = sparklineSVG(vals, 240, 40, "$%.2f")
 		}
 		remStr := fmt.Sprintf("$%.2f", bal.RemainingUSD)
 		if bal.Unlimited {
@@ -246,7 +246,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 					deltaStr = fmt.Sprintf(`<span class="sc-delta badge-sm b-warn">%s%.1f%%</span>`, sign, dp)
 				}
 			}
-			svg := sparklineSVG(vals, 120, 32)
+			svg := sparklineSVG(vals, 120, 32, "%.6fx")
 			trendHTML += fmt.Sprintf(`<div class="spark-cell"><div class="sc-hdr"><span class="sc-name" title="%s">%s</span><span class="sc-val">%.2fx</span></div>%s%s</div>`,
 				esc(g), esc(g), cur, svg, deltaStr)
 		}
@@ -573,7 +573,9 @@ func (s *Server) stationsDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // sparklineSVG renders a mini SVG line chart from values (for the station detail page).
-func sparklineSVG(vals []float64, w, h int) string {
+// tipFmt is the per-point hover-tooltip format (e.g. "%.6fx" for ratio
+// multipliers, "$%.2f" for USD balances). It must contain exactly one verb.
+func sparklineSVG(vals []float64, w, h int, tipFmt string) string {
 	if len(vals) < 2 || h <= 0 || w <= 0 {
 		return ""
 	}
@@ -609,7 +611,7 @@ func sparklineSVG(vals []float64, w, h int) string {
 	b.WriteString(`</svg>`)
 	fmt.Fprintf(&b, `<div class="spark-dots" style="grid-template-columns:repeat(%d,1fr)">`, len(points))
 	for _, p := range points {
-		fmt.Fprintf(&b, `<span class="spark-dot" data-tip="%.6fx"></span>`, p.v)
+		fmt.Fprintf(&b, `<span class="spark-dot" data-tip="` + tipFmt + `"></span>`, p.v)
 	}
 	b.WriteString(`</div></div>`)
 	return b.String()

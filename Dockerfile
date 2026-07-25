@@ -15,15 +15,20 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates wget && update-ca-certificates
 WORKDIR /app
 COPY --from=build /out/transitmonitor /app/transitmonitor
+COPY scripts/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 # Sensible Docker defaults; override via env or compose.
 ENV TRANSMONITOR_CONFIG=/config/config.yaml \
     TRANSMONITOR_DB_PATH=/data/transitmonitor.db \
     TRANSMONITOR_DASHBOARD_ADDR=0.0.0.0:7421 \
-    TRANSMONITOR_LOG_LEVEL=info
+    TRANSMONITOR_LOG_LEVEL=info \
+    TRANSMONITOR_CONTAINER=1
 VOLUME ["/data"]
 EXPOSE 7421
 # wget available in the image → native healthcheck.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD wget -qO- http://127.0.0.1:7421/healthz || exit 1
-ENTRYPOINT ["/app/transitmonitor"]
+# Wrapper routes to /data/bin/transitmonitor if an in-panel update placed one
+# there (persists across container recreation), else the image-baked binary.
+ENTRYPOINT ["/entrypoint.sh"]
 # No args → serve (reads TRANSMONITOR_CONFIG). `docker run ... -selftest` works too.

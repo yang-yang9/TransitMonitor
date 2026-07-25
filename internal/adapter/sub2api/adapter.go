@@ -240,15 +240,17 @@ func (a *Adapter) ProbeCapabilities(ctx context.Context) (domain.CapabilityRepor
 			caps.HasUserChannels = status == 200
 			caps.Endpoints = append(caps.Endpoints, endpoint("/api/v1/channels/available", status, nil, now))
 		}
-		// /api/v1/user/profile (user JWT) — wallet balance. balance/frozen are
-		// already USD (no QuotaPerUnit conversion needed). A wallet has no fixed
-		// limit, so Total stays 0 (unknown, not unlimited).
+		// /api/v1/user/profile (user JWT) — wallet balance. balance is the
+		// spendable wallet amount (USD); frozen_balance is reserved/locked credit,
+		// NOT consumed usage, so it is NOT mapped into QuotaUsed (the Used KPI
+		// would otherwise mislabel reserved funds as consumed spend). /profile
+		// exposes no consumed-usage total, so Used stays 0. A wallet has no fixed
+		// limit, so Total stays 0. No QuotaPerUnit conversion — balance is USD.
 		if status, body, err := a.jwtGet(ctx, "/api/v1/user/profile"); err == nil && status == 200 {
 			var pr userProfileResp
 			if json.Unmarshal(body, &pr) == nil && pr.Code == 0 {
 				caps.HasQuota = true
 				caps.QuotaRemaining = pr.Data.Balance
-				caps.QuotaUsed = pr.Data.FrozenBalance
 			}
 			caps.Endpoints = append(caps.Endpoints, endpoint("/api/v1/user/profile", status, nil, now))
 		}

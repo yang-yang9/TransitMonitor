@@ -571,17 +571,19 @@ func scanBalance(sc func(...any) error) (domain.BalanceObservation, error) {
 func (s *Store) LatestBalance(ctx context.Context, stationID string) (domain.BalanceObservation, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT station_id, observed_at, remaining, used, total,
 		remaining_usd, used_usd, total_usd, unlimited, currency, quota_per_unit, usd_exchange_rate, source_endpoint
-		FROM balance_observations WHERE station_id=? ORDER BY observed_at DESC LIMIT 1`, stationID)
+		FROM balance_observations WHERE station_id=? ORDER BY observed_at DESC, id DESC LIMIT 1`, stationID)
 	return scanBalance(row.Scan)
 }
 
 // PrevBalance returns the most recent balance observation stored BEFORE `before`
 // for a station (zero, sql.ErrNoRows when none). Used by the scheduler to diff
 // the quota_drop_pct alert against the prior reading, before inserting the new one.
+// The id tie-breaker makes the "previous" row deterministic when two readings
+// share the same observed_at second (e.g. a manual PollNow racing a scheduled tick).
 func (s *Store) PrevBalance(ctx context.Context, stationID string, before time.Time) (domain.BalanceObservation, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT station_id, observed_at, remaining, used, total,
 		remaining_usd, used_usd, total_usd, unlimited, currency, quota_per_unit, usd_exchange_rate, source_endpoint
-		FROM balance_observations WHERE station_id=? AND observed_at < ? ORDER BY observed_at DESC LIMIT 1`,
+		FROM balance_observations WHERE station_id=? AND observed_at < ? ORDER BY observed_at DESC, id DESC LIMIT 1`,
 		stationID, before.Unix())
 	return scanBalance(row.Scan)
 }
@@ -613,11 +615,13 @@ func (s *Store) BalanceHistory(ctx context.Context, stationID string, limit int)
 
 // LatestBalances returns the most recent balance observation per station (for
 // the /balance overview page). Stations with no balance reading are omitted.
+// The id tie-breaker keeps one row per station even when two readings share the
+// same observed_at second (a manual PollNow racing a scheduled tick).
 func (s *Store) LatestBalances(ctx context.Context) ([]domain.BalanceObservation, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT station_id, observed_at, remaining, used, total,
 		remaining_usd, used_usd, total_usd, unlimited, currency, quota_per_unit, usd_exchange_rate, source_endpoint
 		FROM balance_observations o
-		WHERE observed_at = (SELECT MAX(observed_at) FROM balance_observations WHERE station_id = o.station_id)
+		WHERE id = (SELECT id FROM balance_observations WHERE station_id = o.station_id ORDER BY observed_at DESC, id DESC LIMIT 1)
 		ORDER BY station_id`)
 	if err != nil {
 		return nil, err

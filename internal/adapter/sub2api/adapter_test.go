@@ -378,12 +378,14 @@ func TestUserProfilePopulatesBalance(t *testing.T) {
 	if !eq(caps.QuotaRemaining, 42.50) {
 		t.Errorf("QuotaRemaining: want 42.50 got %v", caps.QuotaRemaining)
 	}
-	if !eq(caps.QuotaUsed, 3.25) {
-		t.Errorf("QuotaUsed (frozen): want 3.25 got %v", caps.QuotaUsed)
+	// frozen_balance (3.25) is reserved credit, NOT consumed usage — must NOT be
+	// mapped into QuotaUsed, which would mislabel reserved funds as spent.
+	if caps.QuotaUsed != 0 {
+		t.Errorf("QuotaUsed: want 0 (frozen_balance is reserved, not used), got %v", caps.QuotaUsed)
 	}
 	// NewBalanceFromCaps must keep sub2api values in USD (no /QuotaPerUnit math).
 	ob := domain.NewBalanceFromCaps(caps, time.Time{}, "/api/v1/user/profile")
-	if ob.Currency != "USD" || !eq(ob.RemainingUSD, 42.50) || !eq(ob.UsedUSD, 3.25) {
+	if ob.Currency != "USD" || !eq(ob.RemainingUSD, 42.50) || ob.UsedUSD != 0 {
 		t.Errorf("balance observation wrong: %+v", ob)
 	}
 }

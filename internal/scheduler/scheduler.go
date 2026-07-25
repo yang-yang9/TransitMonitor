@@ -184,6 +184,10 @@ func (s *Scheduler) evaluateBalanceRules(ctx context.Context, stationID string, 
 // dispatchAlert sends one AlertEvent through the notifier and records it in the
 // store (sent flag + error), honoring the cooldown dedup. Shared by the change
 // / probe paths and the direct endpoint_auth_failed / poll_failure_streak path.
+// On a failed send the cooldown stamp is rolled back so the next poll that still
+// observes the condition retries immediately — otherwise a transient notifier
+// failure (5xx / network blip) would suppress re-firing for the full cooldown
+// window, leaving the operator blind to a condition that never landed.
 func (s *Scheduler) dispatchAlert(ctx context.Context, ev alert.AlertEvent) {
 	if s.Notifier == nil {
 		return
@@ -192,8 +196,23 @@ func (s *Scheduler) dispatchAlert(ctx context.Context, ev alert.AlertEvent) {
 		return
 	}
 	sendErr := s.Notifier.Send(ctx, ev)
+	if sendErr != nil {
+		s.clearAlertCooldown(ev)
+	}
 	payload, _ := json.Marshal(ev.Payload)
 	_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
+}
+
+// clearAlertCooldown removes the cooldown stamp for an event so a failed send
+// can be retried on the next evaluation. No-op if cooldown is disabled.
+func (s *Scheduler) clearAlertCooldown(ev alert.AlertEvent) {
+	if s.cooldown <= 0 {
+		return
+	}
+	key := ev.Rule + "|" + ev.StationID + "|" + ev.Model
+	s.alertMu.Lock()
+	delete(s.lastAlert, key)
+	s.alertMu.Unlock()
 }
 
 // recordPollSuccess resets the consecutive-failure streak and marks the station

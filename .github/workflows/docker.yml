@@ -31,3 +31,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          # Inject the git tag as the in-binary version string so the in-panel
+          # updater can compare against GitHub Releases. Without this the
+          # released image reports version=dev and self-update miscompares.
+          build-args: |
+            VERSION=${{ github.ref_name }}

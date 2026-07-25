@@ -13,9 +13,26 @@ import (
 
 	"transitmonitor/internal/domain"
 	"transitmonitor/internal/store"
+	"transitmonitor/internal/updater"
 
 	"github.com/go-chi/chi/v5"
 )
+
+// Updater is the in-panel update/rollback surface (implemented by
+// internal/updater.Service; wired by main). Defined here so the dashboard
+// package does not depend on the updater implementation, mirroring the
+// StationManager decoupling used for /settings.
+type Updater interface {
+	CurrentVersion() string
+	Mode() string
+	WrapperReady() bool
+	CheckUpdates(ctx context.Context, force bool) (updater.UpdateInfo, error)
+	PerformUpdate(ctx context.Context) (updater.UpdateOutcome, error)
+	Rollback(ctx context.Context) (updater.UpdateOutcome, error)
+	RollbackToVersion(ctx context.Context, version string) (updater.UpdateOutcome, error)
+	ListRollbackVersions(ctx context.Context) ([]updater.RollbackVersion, error)
+	Restart(ctx context.Context) error
+}
 
 // Server is the dashboard HTTP server.
 type Server struct {
@@ -24,12 +41,21 @@ type Server struct {
 	token    string
 	encKey   []byte // for persisting /settings notifier secrets at rest
 	mgr      StationManager
+	updater  Updater
+	version  string // running build version, surfaced on /system + /api/system/version
 	mux      *chi.Mux
 	httpSrv  *http.Server
 }
 
 // SetEncKey enables /settings notifier-secret persistence (mirrors scheduler.SetEncKey).
 func (s *Server) SetEncKey(k []byte) { s.encKey = k }
+
+// SetVersion plumbs the running build version (from -ldflags -X main.version)
+// into the dashboard so /system and /api/system/version can display it.
+func (s *Server) SetVersion(v string) { s.version = v }
+
+// SetUpdater wires the in-panel update/rollback service (enables /system).
+func (s *Server) SetUpdater(u Updater) { s.updater = u }
 
 // New constructs a dashboard server. token=="" means localhost-only.
 func New(stations []domain.Station, st *store.Store, token string) *Server {
@@ -51,6 +77,7 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Get("/stations/new", s.stationFormHTML)
 	r.Get("/stations/{id}/edit", s.stationEditHTML)
 	r.Get("/settings", s.settingsHTML)
+	r.Get("/system", s.systemHTML)
 	r.Get("/api/stations", s.stationsJSON)
 	r.Get("/api/ratios", s.ratiosJSON)
 	r.Get("/api/balance", s.balanceJSON)
@@ -65,6 +92,14 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Post("/api/stations/{id}/login", s.stationsLogin)
 	r.Post("/api/settings", s.settingsSave)
 	r.Post("/api/settings/test", s.settingsTest)
+	// In-panel update / rollback / restart (sub2api-style). Protected by the
+	// same authMiddleware as every other mutation route on this mux.
+	r.Get("/api/system/version", s.systemVersionJSON)
+	r.Get("/api/system/check-updates", s.systemCheckUpdatesJSON)
+	r.Get("/api/system/rollback-versions", s.systemRollbackVersionsJSON)
+	r.Post("/api/system/upgrade", s.systemUpgradeJSON)
+	r.Post("/api/system/rollback", s.systemRollbackJSON)
+	r.Post("/api/system/restart", s.systemRestartJSON)
 	s.mux = r
 	return s
 }

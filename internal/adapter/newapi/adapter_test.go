@@ -148,6 +148,69 @@ func TestProbeCapabilities(t *testing.T) {
 	}
 }
 
+// TestProbeCapabilities_QuotaBalance: /api/user/self returns new-api's
+// `quota` (REMAINING prepaid balance) + `used_quota` (CUMULATIVE consumed).
+// Verify the adapter maps remaining=quota (not quota-used_quota, which would
+// subtract cumulative usage and go negative) and that NewBalanceFromCaps
+// converts quota units → USD via QuotaPerUnit.
+func TestProbeCapabilities_QuotaBalance(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{
+			"success": true,
+			"data":    map[string]any{"quota_per_unit": 500000, "usd_exchange_rate": 7.3},
+		})
+	})
+	mux.HandleFunc("/api/pricing", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, pricingResp{Success: true, GroupRatio: map[string]float64{"default": 1.0}})
+	})
+	mux.HandleFunc("/api/user/self", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer pat-1" {
+			writeJSON(w, 401, map[string]any{"success": false})
+			return
+		}
+		// quota=2.5e6 (remaining, $5), used_quota=2.5e8 (cumulative, $500).
+		writeJSON(w, 200, map[string]any{
+			"success": true,
+			"data":    map[string]any{"quota": 2500000, "used_quota": 250000000},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a := New("s1", srv.URL, "pat-1", "", "sk-test", "default", srv.Client())
+	caps, err := a.ProbeCapabilities(context.Background())
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if !caps.HasQuota {
+		t.Fatal("HasQuota should be true")
+	}
+	if caps.QuotaRemaining != 2500000 {
+		t.Errorf("QuotaRemaining: want 2500000 (quota is remaining) got %v", caps.QuotaRemaining)
+	}
+	if caps.QuotaUsed != 250000000 {
+		t.Errorf("QuotaUsed: want 250000000 (cumulative) got %v", caps.QuotaUsed)
+	}
+	if caps.QuotaTotal != 0 {
+		t.Errorf("QuotaTotal: want 0 (prepaid wallet has no fixed limit) got %v", caps.QuotaTotal)
+	}
+	// NewBalanceFromCaps: new-api branch divides by QuotaPerUnit (500000).
+	ob := domain.NewBalanceFromCaps(caps, time.Time{}, "/api/user/self")
+	if ob.Currency != "quota" {
+		t.Errorf("Currency: want quota got %s", ob.Currency)
+	}
+	if ob.RemainingUSD != 5 {
+		t.Errorf("RemainingUSD: want 5 got %v", ob.RemainingUSD)
+	}
+	if ob.UsedUSD != 500 {
+		t.Errorf("UsedUSD: want 500 got %v", ob.UsedUSD)
+	}
+	if ob.TotalUSD != 0 {
+		t.Errorf("TotalUSD: want 0 got %v", ob.TotalUSD)
+	}
+}
+
 func TestFetchRatios_PricingFallback(t *testing.T) {
 	_, a := startMock(t, mockCfg{
 		pricingItems: []pricingItem{
