@@ -5,8 +5,9 @@
 
 services:
   transitmonitor:
-    build: .
-    image: transitmonitor:latest
+    # Prebuilt multi-arch image (amd64+arm64) published to ghcr.io on every `v*` tag.
+    # To build from source instead: comment the line below and use `build: .`.
+    image: ghcr.io/yang-yang9/transitmonitor:v0.0.1
     container_name: transitmonitor
     restart: unless-stopped
     ports:

@@ -122,7 +122,7 @@ stations:
 ```yaml
 services:
   transitmonitor:
-    build: .
+    image: ghcr.io/yang-yang9/transitmonitor:v0.0.1   # 预构建多架构镜像；本地构建改 build: .
     restart: unless-stopped
     ports: ["7421:7421"]
     environment:
@@ -137,13 +137,14 @@ services:
 启动：
 ```bash
 cp config.example.yaml config.yaml && $EDITOR config.yaml
-TRANSMONITOR_DASHBOARD_TOKEN=xxx TRANSMONITOR_ENCRYPTION_KEY=xxx docker compose up -d --build
+TRANSMONITOR_DASHBOARD_TOKEN=xxx TRANSMONITOR_ENCRYPTION_KEY=xxx docker compose up -d   # 拉取预构建镜像
 docker compose logs -f           # 看 slog JSON 日志
 curl -H "Authorization: Bearer xxx" http://localhost:7421/api/stations
 ```
-多架构镜像（CI 在打 tag 时自动 buildx push `ghcr.io/<org>/<repo>:<tag>` + `:latest`，amd64+arm64）：
+多架构镜像（CI 在打 `v*` tag 时自动 buildx push `ghcr.io/yang-yang9/transitmonitor:<tag>` + `:latest`，amd64+arm64）：
 ```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t transitmonitor:latest --push .
+docker pull ghcr.io/yang-yang9/transitmonitor:v0.0.1   # 或 :latest 跟最新
+# 本地 buildx：docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/yang-yang9/transitmonitor:latest --push .
 ```
 > 注意：容器绑定 `0.0.0.0:7421`，**必须设 `TRANSMONITOR_DASHBOARD_TOKEN`** 否则外部访问被 401（healthz 走 localhost 免鉴权）。
 

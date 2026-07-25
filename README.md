@@ -45,15 +45,19 @@ export TRANSMONITOR_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 
 ```bash
 cp config.example.yaml config.yaml && $EDITOR config.yaml   # 填真实站凭据
-docker build -t transitmonitor:latest .
-docker run -d -p 7421:7421 \
+# 用预构建多架构镜像（amd64+arm64，CI 在 v* tag 时推 ghcr.io）：
+docker run -d -p 7421:7421 --name transitmonitor \
   -v "$PWD/config.yaml:/config/config.yaml:ro" -v transitmonitor-data:/data \
   -e TRANSMONITOR_DASHBOARD_TOKEN=secret \
-  transitmonitor:latest
-# 或一键：TRANSMONITOR_DASHBOARD_TOKEN=secret docker compose up -d --build
+  ghcr.io/yang-yang9/transitmonitor:v0.0.1
+# 或本地构建：
+# docker build -t transitmonitor:latest . && docker run -d -p 7421:7421 \
+#   -v "$PWD/config.yaml:/config/config.yaml:ro" -v transitmonitor-data:/data \
+#   -e TRANSMONITOR_DASHBOARD_TOKEN=secret transitmonitor:latest
+# 或一键：TRANSMONITOR_DASHBOARD_TOKEN=secret docker compose up -d
 curl -H "Authorization: Bearer secret" http://localhost:7421/api/stations
 ```
-多架构镜像（amd64+arm64）：`docker buildx build --platform linux/amd64,linux/arm64 -t transitmonitor:latest --push .`
+多架构镜像（amd64+arm64）：CI 在 `v*` tag 时自动 buildx push `ghcr.io/yang-yang9/transitmonitor:<tag>` + `:latest`。
 ⚠ 容器绑定 `0.0.0.0:7421`，**必须设 `TRANSMONITOR_DASHBOARD_TOKEN`** 才能外部访问（`/healthz` 免鉴权）。
 完整部署手册见 [`docs/usage.md`](docs/usage.md)。
 
