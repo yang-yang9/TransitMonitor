@@ -683,8 +683,8 @@ func groupRatioChart(groups []domain.GroupDisplay, lg bool) string {
 		b.WriteString(fmt.Sprintf(
 			`<div class="gr-row"><span class="gr-name" title="%s">%s</span>`+
 				`<div class="gr-track"><span class="gr-bar %s" style="width:%.1f%%"></span></div>`+
-				`<span class="gr-val">%.2fx</span></div>`,
-			esc(g.Name), esc(g.Name), bc, pct, g.Ratio))
+				`<span class="gr-val">%s</span></div>`,
+			esc(g.Name), esc(g.Name), bc, pct, fmtRatio(g.Ratio)+"x"))
 	}
 	b.WriteString(`</div>`)
 	return b.String()
@@ -711,8 +711,8 @@ func renderHiddenGroupsExpander(lang string, hidden []domain.GroupDisplay) strin
 		b.WriteString(fmt.Sprintf(
 			`<div class="gr-row gr-dim"><span class="gr-name" title="%s">%s</span>`+
 				`<div class="gr-track"><span class="gr-bar %s" style="width:100%%"></span></div>`+
-				`<span class="gr-val">%.2fx</span></div>`,
-			esc(g.Name), esc(g.Name), bc, g.Ratio))
+				`<span class="gr-val">%s</span></div>`,
+			esc(g.Name), esc(g.Name), bc, fmtRatio(g.Ratio)+"x"))
 	}
 	b.WriteString(`</div></details>`)
 	return b.String()
