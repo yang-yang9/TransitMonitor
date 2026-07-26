@@ -53,3 +53,60 @@ func TestOverviewHidesConfiguredHiddenGroups(t *testing.T) {
 		t.Errorf("hidden expander marker missing:\n%s", body)
 	}
 }
+
+func TestStationGroupSettingsSaveAndRender(t *testing.T) {
+	srv, st, cleanup := newDash(t, "")
+	defer cleanup()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	_ = st.InsertSnapshot(ctx, domain.RawSnapshot{
+		StationID: "s1", ObservedAt: now,
+		GroupRatios: map[string]float64{"vip": 0.5, "pro": 1.0, "internal": 2.0},
+	})
+	// also seed the station row so the FK on station_group_config + snapshots is satisfied
+	// (newDash seeds stations in-memory only; UpsertStation persists the row).
+	_ = st.UpsertStation(ctx, domain.Station{ID: "s1", Name: "S1", Kind: domain.KindNewAPI, BaseURL: "https://a.example", Enabled: true}, nil)
+
+	// POST the full config: vip visible(0), pro hidden(0), internal visible(1)
+	body := `{"groups":[{"group_name":"vip","visible":true,"sort_order":0},` +
+		`{"group_name":"pro","visible":false,"sort_order":0},` +
+		`{"group_name":"internal","visible":true,"sort_order":1}]}`
+	req := httptest.NewRequest(http.MethodPost, "/stations/s1/groups", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:1234"
+	r := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(r, req)
+	if r.Code != 200 {
+		t.Fatalf("save: want 200 got %d: %s", r.Code, r.Body.String())
+	}
+
+	// persisted?
+	got, _ := st.GetStationGroupConfigs(ctx, "s1")
+	if len(got) != 3 {
+		t.Fatalf("want 3 cfg rows got %d", len(got))
+	}
+	byName := map[string]domain.StationGroupConfig{}
+	for _, c := range got {
+		byName[c.GroupName] = c
+	}
+	if byName["pro"].Visible {
+		t.Error("pro should be hidden after save")
+	}
+	if byName["internal"].SortOrder != 1 {
+		t.Errorf("internal sort_order: want 1 got %d", byName["internal"].SortOrder)
+	}
+
+	// detail page renders the settings section with a checkbox per group
+	r2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(r2, localReq(http.MethodGet, "/stations/s1"))
+	if r2.Code != 200 {
+		t.Fatalf("detail: want 200 got %d", r2.Code)
+	}
+	html := r2.Body.String()
+	if !strings.Contains(html, "分组展示设置") {
+		t.Errorf("settings section missing:\n%s", html)
+	}
+	if !strings.Contains(html, `name="visible"`) || !strings.Contains(html, "pro") {
+		t.Errorf("per-group checkbox row missing:\n%s", html)
+	}
+}

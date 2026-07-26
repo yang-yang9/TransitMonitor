@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -363,6 +364,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, modelPage) + mpg + `</details>` +
 			`<details class="sec"><summary>` + t(lang, "expand.probes") + ` (` + fmt.Sprintf("%d", len(probeRows)) + `)</summary>` +
 			renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probePage) + ppg + `</details>`
+	body += s.renderGroupSettingsSection(lang, id, groupRatios)
 	s.writeHTMLShell(w, lang, esc(st.Name), "stations", body)
 }
 
@@ -758,4 +760,125 @@ func (s *Server) stationsLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	msg := fmt.Sprintf(t(lang, "form.jwt.ok"), exp.Format("2006-01-02 15:04:05"))
 	writeJSON(w, 200, map[string]string{"message": msg, "expires_at": exp.Format(time.RFC3339)})
+}
+
+// renderGroupSettingsSection renders the inline "分组展示设置" <details> section for
+// the station detail page. Lists every group currently polled for the station
+// (from groupRatios) plus any configured-but-currently-absent groups (orphans),
+// each with a ☑ visible checkbox + ▲▼ movers + current ratio (RO).
+func (s *Server) renderGroupSettingsSection(lang string, stationID string, groupRatios map[string]float64) string {
+	cfgs, _ := s.store.GetStationGroupConfigs(context.Background(), stationID)
+	byName := map[string]domain.StationGroupConfig{}
+	for _, c := range cfgs {
+		byName[c.GroupName] = c
+	}
+	names := map[string]bool{}
+	for g := range groupRatios {
+		names[g] = true
+	}
+	for g := range byName {
+		names[g] = true
+	}
+	type row struct {
+		name     string
+		visible  bool
+		order    int
+		hasRatio bool
+		ratio    float64
+	}
+	rows := make([]row, 0, len(names))
+	for g := range names {
+		r := row{name: g}
+		if c, ok := byName[g]; ok {
+			r.visible, r.order = c.Visible, c.SortOrder
+		} else {
+			r.visible, r.order = true, 0
+		}
+		if v, ok := groupRatios[g]; ok {
+			r.hasRatio, r.ratio = true, v
+		}
+		rows = append(rows, r)
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].visible != rows[j].visible {
+			return rows[i].visible
+		}
+		if rows[i].order != rows[j].order {
+			return rows[i].order < rows[j].order
+		}
+		return rows[i].name < rows[j].name
+	})
+	var b strings.Builder
+	b.WriteString(`<details class="sec"><summary>` + t(lang, "section.groupsettings") + `</summary>`)
+	b.WriteString(`<div class="tbl-wrap"><table><thead><tr><th>` + t(lang, "col.visible") +
+		`</th><th>` + t(lang, "col.group") + `</th><th>` + t(lang, "col.groupratio") +
+		`</th><th>` + t(lang, "col.order") + `</th></tr></thead><tbody id="tm-gc-body">`)
+	for _, r := range rows {
+		checked := ""
+		if r.visible {
+			checked = "checked"
+		}
+		ratioCell := `<span class="mono p-na">—</span>`
+		if r.hasRatio {
+			ratioCell = fmt.Sprintf(`<span class="num mono">%.2fx</span>`, r.ratio)
+		}
+		b.WriteString(fmt.Sprintf(`<tr data-grp="%s"><td><input type="checkbox" name="visible" %s></td>`,
+			esc(r.name), checked))
+		b.WriteString(`<td><span class="mono">` + esc(r.name) + `</span></td>`)
+		b.WriteString(`<td>` + ratioCell + `</td>`)
+		b.WriteString(`<td><button class="btn btn-sm btn-outline" onclick="tmGcMove(this,-1)">` + t(lang, "btn.moveup") + `</button> ` +
+			`<button class="btn btn-sm btn-outline" onclick="tmGcMove(this,1)">` + t(lang, "btn.movedown") + `</button></td></tr>`)
+	}
+	b.WriteString(`</tbody></table></div>`)
+	b.WriteString(`<div class="btn-group" style="margin-top:.8rem"><button class="btn" onclick="tmGcSave('` + esc(stationID) + `')">` +
+		t(lang, "btn.savegroupconfig") + `</button> <span id="tm-gc-status" class="meta"></span></div>`)
+	b.WriteString(`<script>
+function tmGcMove(btn,dir){var tr=btn.closest('tr'),tb=tr.parentNode;
+ if(dir<0&&tr.previousElementSibling)tb.insertBefore(tr,tr.previousElementSibling);
+ else if(dir>0&&tr.nextElementSibling)tb.insertBefore(tr,tr.nextElementSibling.nextSibling);}
+function tmGcSave(id){var rows=document.querySelectorAll('#tm-gc-body tr');
+ var gs=[];rows.forEach(function(tr,i){var cb=tr.querySelector('[name=visible]');
+ gs.push({group_name:tr.dataset.grp,visible:!!cb.checked,sort_order:i});});
+ fetch('/stations/'+id+'/groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groups:gs})})
+ .then(function(r){return r.json();}).then(function(d){
+  var st=document.getElementById('tm-gc-status');if(st)st.textContent=d.ok?'✓':'✗ '+d.error;
+ });}
+</script>`)
+	b.WriteString(`</details>`)
+	return b.String()
+}
+
+// groupConfigInput is one row of the POST /stations/{id}/groups payload.
+type groupConfigInput struct {
+	GroupName string `json:"group_name"`
+	Visible   bool   `json:"visible"`
+	SortOrder int    `json:"sort_order"`
+}
+
+// POST /stations/{id}/groups — replace the station's per-group display config.
+// Body: {"groups":[{group_name,visible,sort_order}]}. Returns {"ok":true}.
+func (s *Server) stationGroupSettingsSave(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if _, ok := s.findStation(id); !ok {
+		writeJSON(w, 404, map[string]string{"error": "station not found"})
+		return
+	}
+	var in struct {
+		Groups []groupConfigInput `json:"groups"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "bad json: " + err.Error()})
+		return
+	}
+	cfgs := make([]domain.StationGroupConfig, 0, len(in.Groups))
+	for _, g := range in.Groups {
+		cfgs = append(cfgs, domain.StationGroupConfig{
+			StationID: id, GroupName: g.GroupName, Visible: g.Visible, SortOrder: g.SortOrder,
+		})
+	}
+	if err := s.store.SaveStationGroupConfigs(r.Context(), id, cfgs); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
