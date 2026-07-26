@@ -7,6 +7,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -84,6 +85,9 @@ func Load(path string) (*File, error) {
 		if st.BaseURL == "" {
 			return nil, fmt.Errorf("station %s: base_url is required", st.ID)
 		}
+		// Normalize: strip surrounding whitespace and any trailing slash so
+		// baseURL + "/v1/..." concatenation never yields a double slash.
+		st.BaseURL = strings.TrimRight(strings.TrimSpace(st.BaseURL), "/")
 		if st.Kind != "newapi" && st.Kind != "sub2api" {
 			return nil, fmt.Errorf("station %s: kind must be newapi or sub2api (got %q)", st.ID, st.Kind)
 		}

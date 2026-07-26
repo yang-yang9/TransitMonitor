@@ -445,8 +445,12 @@ func (in stationInput) toStation() (domain.Station, error) {
 	if err != nil {
 		return domain.Station{}, err
 	}
+	// Normalize base URL: strip surrounding whitespace and any trailing slash
+	// so concatenation (baseURL + "/v1/...") never produces a double slash
+	// that 404s the polling requests.
+	baseURL := strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
 	return domain.Station{
-		ID: in.ID, Name: in.Name, BaseURL: in.BaseURL, Kind: domain.StationKind(in.Kind),
+		ID: in.ID, Name: in.Name, BaseURL: baseURL, Kind: domain.StationKind(in.Kind),
 		Auth: domain.AuthConfig{
 			APIKey: in.Auth.APIKey, PAT: in.Auth.PAT, UserID: in.Auth.UserID,
 			JWT: in.Auth.JWT, AdminEmail: in.Auth.AdminEmail, AdminPass: in.Auth.AdminPass,
