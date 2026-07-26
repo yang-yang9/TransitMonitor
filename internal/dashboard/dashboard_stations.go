@@ -14,6 +14,7 @@ import (
 
 	"transitmonitor/internal/domain"
 	"transitmonitor/internal/jwtlogin"
+	"transitmonitor/internal/normalize"
 )
 
 // StationManager lets the dashboard add/remove stations at runtime
@@ -135,6 +136,19 @@ tb.addEventListener('drop',function(e){
 }
 
 // GET /stations/{id} — station detail: ratios + recent changes + probes.
+// effRatios computes the "effective ratio" bar values (ei, eo) for the station
+// detail ratios table. sub2api's NativeRatio is already the effective group
+// rate × peak (the discount IS the native ratio), so it is used as-is —
+// multiplying by the group ratio again would square the discount. new-api's
+// NativeRatio is a per-unit model ratio that still needs the group ratio (and
+// completion ratio) folded in to become an effective ratio.
+func effRatios(o domain.RatioObservation, gr, cr float64) (ei, eo float64) {
+	if o.NativeRatioKind == normalize.KindSub2APIRate {
+		return o.NativeRatio, o.NativeRatio
+	}
+	return o.NativeRatio * gr, o.NativeRatio * cr * gr
+}
+
 func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
 	id := chi.URLParam(r, "id")
@@ -166,8 +180,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 		if cr == 0 {
 			cr = 1.0
 		}
-		ei := o.NativeRatio * gr
-		eo := o.NativeRatio * cr * gr
+		ei, eo := effRatios(o, gr, cr)
 		if eo > maxOut {
 			maxOut = eo
 		}
@@ -188,12 +201,12 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			pct = r.effOut / maxOut * 100
 		}
 		effCell := fmt.Sprintf(`<div class="rat-bar"><span class="rb-fill" style="width:%.1f%%"></span></div>`, pct) +
-			`<span class="num mono b-strong">` + fmt.Sprintf("%.4f", r.effIn) + ` / ` + fmt.Sprintf("%.4f", r.effOut) + `</span>`
+			`<span class="num mono b-strong">` + fmtRatio(r.effIn) + ` / ` + fmtRatio(r.effOut) + `</span>`
 		ratioRows = append(ratioRows, []string{
 			esc(r.o.GroupName), `<span class="mono">` + esc(r.o.ModelName) + `</span>`,
-			`<span class="num mono">` + fmt.Sprintf("%.4f", r.o.NativeRatio) + `</span>`,
-			`<span class="num mono">` + fmt.Sprintf("%.4f", r.cr) + `</span>`,
-			`<span class="num mono">` + fmt.Sprintf("%.2fx", r.gr) + `</span>`,
+			`<span class="num mono">` + fmtRatio(r.o.NativeRatio) + `</span>`,
+			`<span class="num mono">` + fmtRatio(r.cr) + `</span>`,
+			`<span class="num mono">` + fmtRatio(r.gr) + "x" + `</span>`,
 			effCell,
 			statusBadge(lang, r.o.Sentinel),
 		})
@@ -225,7 +238,8 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 		uptime = fmt.Sprintf("%d errors", pollErrs)
 	}
 	// HERO: large group-ratio bar chart.
-	heroChart := groupRatioChart(groupRatios, true)
+	stGroupCfgs, _ := s.store.GetStationGroupConfigs(ctx, id)
+	heroChart := groupRatioChart(domain.PartitionGroups(groupRatios, stGroupCfgs), true)
 	// Balance section: latest reading + trend sparkline (only if the station
 	// exposes a balance source).
 	balanceHTML := ""
@@ -295,9 +309,9 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 					deltaStr = fmt.Sprintf(`<span class="sc-delta badge-sm b-warn">%s%.1f%%</span>`, sign, dp)
 				}
 			}
-			svg := sparklineSVG(vals, 120, 32, func(v float64) string { return fmt.Sprintf("%.6fx", v) })
-			trendHTML += fmt.Sprintf(`<div class="spark-cell"><div class="sc-hdr"><span class="sc-name" title="%s">%s</span><span class="sc-val">%.2fx</span></div>%s%s</div>`,
-				esc(g), esc(g), cur, svg, deltaStr)
+			svg := sparklineSVG(vals, 120, 32, func(v float64) string { return fmtRatio(v) + "x" })
+			trendHTML += fmt.Sprintf(`<div class="spark-cell"><div class="sc-hdr"><span class="sc-name" title="%s">%s</span><span class="sc-val">%s</span></div>%s%s</div>`,
+				esc(g), esc(g), fmtRatio(cur)+"x", svg, deltaStr)
 		}
 		trendHTML += `</div>`
 	}
