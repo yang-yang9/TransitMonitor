@@ -384,6 +384,15 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 		snap.EndpointsUsed = append([]string{src}, snap.EndpointsUsed...)
 	}
 
+	// When channels/available carried no per-platform groups[] (feature flag
+	// off or older sub2api), all models land in a single group priced at
+	// billing effective. If /api/v1/groups/available separately reported
+	// multiple groups, expand each model into per-group rows so the dashboard
+	// shows the discounted price for each group.
+	if len(snap.GroupRatios) > 1 && allSameGroup(data.Models) {
+		data.Models = expandByGroupRatios(data.Models, snap.GroupRatios)
+	}
+
 	obs := normalize.Sub2APINormalize(data)
 	for i := range obs {
 		obs[i].StationID = a.StationID
@@ -547,4 +556,37 @@ func formatPeakGroup(g availableGroupRef) string {
 		return ""
 	}
 	return fmt.Sprintf("peak %s-%s x%v", g.PeakStart, g.PeakEnd, g.PeakRateMultiplier)
+}
+
+// allSameGroup returns true when every model sits in one group (the no-groups
+// fallback path). Used to decide whether expandByGroupRatios should fire.
+func allSameGroup(models []normalize.Sub2APIModel) bool {
+	if len(models) == 0 {
+		return false
+	}
+	g := models[0].Group
+	for _, m := range models[1:] {
+		if m.Group != g {
+			return false
+		}
+	}
+	return true
+}
+
+// expandByGroupRatios replicates a flat model list (all in one fallback group)
+// into per-group rows using group ratios from /api/v1/groups/available. Each
+// model gets one row per group, with ResolvedRateMultiplier set to that group's
+// rate. This covers the common case where channels/available omits groups[]
+// (feature flag off) but groups/available has the full discount map.
+func expandByGroupRatios(models []normalize.Sub2APIModel, groupRatios map[string]float64) []normalize.Sub2APIModel {
+	out := make([]normalize.Sub2APIModel, 0, len(models)*len(groupRatios))
+	for _, m := range models {
+		for gName, gRate := range groupRatios {
+			row := m
+			row.Group = gName
+			row.ResolvedRateMultiplier = gRate
+			out = append(out, row)
+		}
+	}
+	return out
 }
