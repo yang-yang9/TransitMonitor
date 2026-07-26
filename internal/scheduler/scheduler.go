@@ -39,8 +39,10 @@ type Scheduler struct {
 	Client      *http.Client // for building adapters at runtime
 
 	baseNotifierCfg alert.NotifierConfig // YAML-derived floor; DB overrides merge on top
+	baseRules       []alert.Rule         // YAML-derived fallback; seed to DB on first run
 
 	mu                    sync.Mutex
+	ruleMu                sync.RWMutex // protects Rules
 	runCtx                context.Context
 	cancels               map[string]context.CancelFunc
 	snapshotRetentionDays int
@@ -112,12 +114,22 @@ func (s *Scheduler) shouldFire(ev alert.AlertEvent) bool {
 	return true
 }
 
+// snapshotRules returns a copy of the current rules under RLock.
+func (s *Scheduler) snapshotRules() []alert.Rule {
+	s.ruleMu.RLock()
+	defer s.ruleMu.RUnlock()
+	out := make([]alert.Rule, len(s.Rules))
+	copy(out, s.Rules)
+	return out
+}
+
 // rulesOfType returns the enabled rules of a given type. endpoint_auth_failed
 // and poll_failure_streak rules are emitted directly by the scheduler (not by
 // alert.Evaluate), so it looks them up here.
 func (s *Scheduler) rulesOfType(typ string) []alert.Rule {
+	rules := s.snapshotRules()
 	var out []alert.Rule
-	for _, r := range s.Rules {
+	for _, r := range rules {
 		if r.Enabled && r.Type == typ {
 			out = append(out, r)
 		}
@@ -162,12 +174,15 @@ func (s *Scheduler) evaluateBalanceRules(ctx context.Context, stationID string, 
 		}
 	}
 	// quota_drop_pct: remaining dropped ≥ threshold % vs the previous reading.
+	// dropPct > 0 means balance decreased; direction "down" (default/both) fires
+	// on decrease, "up" fires on increase.
 	for _, r := range s.rulesOfType(alert.RuleQuotaDropPct) {
 		if prev.RemainingUSD <= 0 {
 			continue // no prior reading or prior was 0 — pct undefined
 		}
 		dropPct := (prev.RemainingUSD - bal.RemainingUSD) / prev.RemainingUSD * 100
-		if dropPct >= r.Threshold {
+		signedDelta := -dropPct // positive = balance up, negative = balance down
+		if abs64(dropPct) >= r.Threshold && matchQuotaDirection(r.Direction, signedDelta) {
 			s.dispatchAlert(ctx, alert.AlertEvent{
 				Rule: r.Name, StationID: stationID, Severity: domain.SevWarning,
 				Payload: map[string]any{
@@ -178,6 +193,24 @@ func (s *Scheduler) evaluateBalanceRules(ctx context.Context, stationID string, 
 				CreatedAt: now,
 			})
 		}
+	}
+}
+
+func abs64(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+	return f
+}
+
+func matchQuotaDirection(dir string, signedDelta float64) bool {
+	switch dir {
+	case alert.DirUp:
+		return signedDelta > 0
+	case alert.DirDown:
+		return signedDelta < 0
+	default:
+		return true
 	}
 }
 
@@ -443,7 +476,7 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 		}
 	}
 	if s.Notifier != nil {
-		for _, ev := range alert.Evaluate(s.Rules, events, nil) {
+		for _, ev := range alert.Evaluate(s.snapshotRules(), events, nil) {
 			s.dispatchAlert(ctx, ev)
 		}
 	}
@@ -486,7 +519,7 @@ func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs 
 			fmt.Sprintf("model=%s tokens=%d/%d markup=%.2f%% cost_usd=%.6f declared_unavailable=%v error=%s",
 				pres.Model, pres.TokensIn, pres.TokensOut, pres.MarkupPct, pres.CostUSD, pres.DeclaredUnavailable, pres.Error))
 		if s.Notifier != nil {
-			for _, ev := range alert.Evaluate(s.Rules, nil, []domain.ProbeResult{pres}) {
+			for _, ev := range alert.Evaluate(s.snapshotRules(), nil, []domain.ProbeResult{pres}) {
 				s.dispatchAlert(ctx, ev)
 			}
 		}
@@ -815,4 +848,84 @@ func (s *Scheduler) SendTestAlert(ctx context.Context, kind string) error {
 	payload, _ := json.Marshal(ev.Payload)
 	_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
 	return sendErr
+}
+
+const appSettingAlertRules = "alert_rules"
+
+// SetBaseRules stores the YAML-derived rules as fallback/seed (called by main).
+func (s *Scheduler) SetBaseRules(rules []alert.Rule) {
+	s.baseRules = rules
+}
+
+// LoadRules loads alert rules from the store; if none are stored yet, seeds the
+// store with baseRules (YAML defaults). Must be called after SetBaseRules.
+func (s *Scheduler) LoadRules(ctx context.Context) error {
+	raw, ok, err := s.Store.GetAppSetting(ctx, appSettingAlertRules)
+	if err != nil {
+		return err
+	}
+	if ok {
+		var rules []alert.Rule
+		if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+			return fmt.Errorf("unmarshal alert_rules: %w", err)
+		}
+		s.ruleMu.Lock()
+		s.Rules = rules
+		s.ruleMu.Unlock()
+		return nil
+	}
+	// Seed from baseRules.
+	blob, err := json.Marshal(s.baseRules)
+	if err != nil {
+		return err
+	}
+	if err := s.Store.SetAppSetting(ctx, appSettingAlertRules, string(blob)); err != nil {
+		return err
+	}
+	s.ruleMu.Lock()
+	s.Rules = s.baseRules
+	s.ruleMu.Unlock()
+	return nil
+}
+
+// AlertRules returns a snapshot of the current rules (for the UI).
+func (s *Scheduler) AlertRules(_ context.Context) []alert.Rule {
+	return s.snapshotRules()
+}
+
+// SaveAlertRules validates, persists, and hot-reloads alert rules.
+func (s *Scheduler) SaveAlertRules(ctx context.Context, rules []alert.Rule) error {
+	for i, r := range rules {
+		if r.Name == "" {
+			return fmt.Errorf("rule #%d: name is required", i+1)
+		}
+		if !alert.ValidRuleTypes[r.Type] {
+			return fmt.Errorf("rule #%d: unknown type %q", i+1, r.Type)
+		}
+		if !alert.ValidDirections[r.Direction] {
+			return fmt.Errorf("rule #%d: unknown direction %q", i+1, r.Direction)
+		}
+		if r.Threshold < 0 {
+			return fmt.Errorf("rule #%d: threshold must be >= 0", i+1)
+		}
+	}
+	blob, err := json.Marshal(rules)
+	if err != nil {
+		return err
+	}
+	if err := s.Store.SetAppSetting(ctx, appSettingAlertRules, string(blob)); err != nil {
+		return err
+	}
+	s.ruleMu.Lock()
+	s.Rules = rules
+	s.ruleMu.Unlock()
+	s.alertMu.Lock()
+	s.lastAlert = map[string]time.Time{}
+	s.alertMu.Unlock()
+	return nil
+}
+
+// ResetRules restores the YAML-derived default rules.
+func (s *Scheduler) ResetRules(ctx context.Context) error {
+	return s.SaveAlertRules(ctx, s.baseRules)
 }

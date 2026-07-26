@@ -37,12 +37,43 @@ const (
 	RuleQuotaDropPct       = "quota_drop_pct" // remaining balance dropped ≥ threshold % vs previous poll
 )
 
+// Direction values for delta-based rules.
+const (
+	DirBoth = "both"
+	DirUp   = "up"
+	DirDown = "down"
+)
+
+// ValidRuleTypes enumerates all recognized rule type strings.
+var ValidRuleTypes = map[string]bool{
+	RuleDeltaPct: true, RuleDeltaAbs: true,
+	RuleModelAdded: true, RuleModelRemoved: true,
+	RuleProbeMarkupPct: true, RuleEndpointAuthFail: true,
+	RulePollFailureStreak: true, RuleGroupRatioDeltaPct: true,
+	RuleQuotaBelow: true, RuleQuotaDropPct: true,
+}
+
+// ValidDirections enumerates all recognized direction strings (empty = both).
+var ValidDirections = map[string]bool{"": true, DirBoth: true, DirUp: true, DirDown: true}
+
 // Rule is an alerting rule.
 type Rule struct {
 	Name      string  `yaml:"name" json:"name"`
 	Type      string  `yaml:"type" json:"type"`
 	Threshold float64 `yaml:"threshold" json:"threshold"`
+	Direction string  `yaml:"direction" json:"direction"`
 	Enabled   bool    `yaml:"enabled" json:"enabled"`
+}
+
+func matchDirection(dir string, signedDelta float64) bool {
+	switch dir {
+	case DirUp:
+		return signedDelta > 0
+	case DirDown:
+		return signedDelta < 0
+	default:
+		return true
+	}
 }
 
 // AlertEvent is a fired alert awaiting/after delivery.
@@ -72,19 +103,19 @@ func Evaluate(rules []Rule, events []domain.ChangeEvent, probes []domain.ProbeRe
 				if (e.Field == domain.FieldInput || e.Field == "input_usd_per_1m" ||
 					e.Field == domain.FieldOutput || e.Field == "output_usd_per_1m" ||
 					e.Field == domain.FieldNative || e.Field == "native_ratio") &&
-					abs(e.DeltaPct) >= r.Threshold {
+					abs(e.DeltaPct) >= r.Threshold && matchDirection(r.Direction, e.DeltaPct) {
 					out = append(out, fromChange(r.Name, e, map[string]any{"delta_pct": e.DeltaPct, "delta_abs": e.DeltaAbs}))
 				}
 			}
 		case RuleDeltaAbs:
 			for _, e := range events {
-				if abs(e.DeltaAbs) >= r.Threshold {
+				if abs(e.DeltaAbs) >= r.Threshold && matchDirection(r.Direction, e.DeltaAbs) {
 					out = append(out, fromChange(r.Name, e, map[string]any{"delta_abs": e.DeltaAbs}))
 				}
 			}
 		case RuleGroupRatioDeltaPct:
 			for _, e := range events {
-				if e.Field == domain.FieldGroupRatio && abs(e.DeltaPct) >= r.Threshold {
+				if e.Field == domain.FieldGroupRatio && abs(e.DeltaPct) >= r.Threshold && matchDirection(r.Direction, e.DeltaPct) {
 					out = append(out, fromChange(r.Name, e, map[string]any{
 						"group": e.Group, "delta_pct": e.DeltaPct, "delta_abs": e.DeltaAbs,
 					}))
@@ -104,7 +135,7 @@ func Evaluate(rules []Rule, events []domain.ChangeEvent, probes []domain.ProbeRe
 			}
 		case RuleProbeMarkupPct:
 			for _, p := range probes {
-				if abs(p.MarkupPct) >= r.Threshold {
+				if abs(p.MarkupPct) >= r.Threshold && matchDirection(r.Direction, p.MarkupPct) {
 					out = append(out, AlertEvent{
 						Rule: r.Name, StationID: p.StationID, Model: p.Model,
 						Severity:  "warning",
