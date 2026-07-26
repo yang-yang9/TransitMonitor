@@ -3,10 +3,16 @@
 // Fallback chain:
 //
 //	/v1/sub2api/billing (sk-key)             → per-key effective_rate_multiplier (404 in simple mode)
-//	/api/v1/channels/available (user JWT)    → per-model base prices (input/output/cache per-token USD)
+//	/api/v1/channels/available (user JWT)    → per-(model, group) base prices + each group's rate_multiplier
 //
-// The effective multiplier from billing already folds in peak + per-user
-// overrides; base prices come from channels' supported_models[].pricing.
+// sub2api decouples price from discount: channels/available carries the RAW
+// LiteLLM per-token USD price on supported_models[].pricing and the group's
+// rate_multiplier (the discount) as a sibling field on the platform's groups[].
+// modelsFromChannels folds each group's rate (× peak, in the station tz) into a
+// per-(model, group) row so a discounted group surfaces a discounted USD/1M
+// rather than the original LiteLLM price. The sk-key's billing effective (which
+// also folds per-user overrides) is only used as a degraded fallback when a
+// platform section carries no groups[].
 // Spec: openspec/.../specs/ratio-collection-sub2api/spec.md
 package sub2api
 
@@ -16,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"transitmonitor/internal/domain"
@@ -115,6 +122,7 @@ type billingResp struct {
 	PeakRateMultiplier      *float64 `json:"peak_rate_multiplier"`
 	AppliedPeakMultiplier   *float64 `json:"applied_peak_multiplier"`
 	EffectiveRateMultiplier float64  `json:"effective_rate_multiplier"`
+	Timezone                *string  `json:"timezone"` // station tz for peak-window math
 }
 
 type modelPricing struct {
@@ -130,8 +138,25 @@ type supportedModel struct {
 }
 
 type platformSection struct {
-	Platform        string           `json:"platform"`
-	SupportedModels []supportedModel `json:"supported_models"`
+	Platform        string              `json:"platform"`
+	Groups          []availableGroupRef `json:"groups"`
+	SupportedModels []supportedModel    `json:"supported_models"`
+}
+
+// availableGroupRef is a per-platform group reference inside channels/available.
+// It carries the group's DEFAULT rate_multiplier and peak config (NOT the per-user
+// override — that lives on /api/v1/groups/rates, which the monitor does not call).
+// Each group's rate_multiplier is a discount off the raw LiteLLM per-token price
+// carried on the sibling supported_models[].pricing; it must be folded into the
+// model price to surface the discounted USD/1M the user actually pays.
+type availableGroupRef struct {
+	Name               string  `json:"name"`
+	SubscriptionType   string  `json:"subscription_type"`
+	RateMultiplier     float64 `json:"rate_multiplier"`
+	PeakRateEnabled    bool    `json:"peak_rate_enabled"`
+	PeakStart          string  `json:"peak_start"`
+	PeakEnd            string  `json:"peak_end"`
+	PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
 }
 
 type availableChannel struct {
@@ -271,6 +296,7 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 	data := normalize.Sub2APIRatioData{SimpleMode: caps.SimpleMode}
 	var effective float64
 	var peakInfo string
+	var loc *time.Location // station tz for peak-window math (from billing)
 	src := "/v1/sub2api/billing"
 
 	if caps.HasBilling || caps.SimpleMode {
@@ -286,6 +312,11 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 			}
 			effective = br.EffectiveRateMultiplier
 			peakInfo = formatPeak(&br)
+			if br.Timezone != nil && *br.Timezone != "" {
+				if l, lerr := time.LoadLocation(*br.Timezone); lerr == nil {
+					loc = l
+				}
+			}
 			// Record the group rate multiplier so the dashboard shows the station's
 			// core group ratio even when no per-model source yields models (e.g.
 			// available-channels feature flag off + /v1/models gated by balance).
@@ -333,7 +364,7 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 			snap.EndpointsUsed = append(snap.EndpointsUsed, "/api/v1/channels/available")
 			var cr channelsAvailableResp
 			if json.Unmarshal(body, &cr) == nil {
-				data.Models = a.modelsFromChannels(cr.Data, effective, peakInfo)
+				data.Models = a.modelsFromChannels(cr.Data, effective, peakInfo, loc)
 			}
 		}
 	}
@@ -373,41 +404,147 @@ func formatPeak(br *billingResp) string {
 	return fmt.Sprintf("peak %s-%s %s", *br.PeakStart, *br.PeakEnd, mult)
 }
 
-// modelsFromChannels flattens channel→platforms→supported_models into a
-// per-model list (first occurrence wins on duplicate model names).
-func (a *Adapter) modelsFromChannels(channels []availableChannel, effective float64, peakInfo string) []normalize.Sub2APIModel {
+// modelsFromChannels flattens channel→platforms→supported_models into
+// per-(model, group) entries, priced at EACH group's own rate_multiplier × peak.
+//
+// sub2api decouples price from discount: channels/available carries the RAW
+// LiteLLM per-token price on supported_models[].pricing and the group's
+// rate_multiplier (the discount) as a sibling field on the platform's groups[].
+// Folding the discount in per-group is what makes a discounted group surface a
+// discounted USD/1M instead of the original LiteLLM price. First occurrence wins
+// per (model, group) on duplicates.
+//
+// Degraded fallback: a platform section without groups[] (older / non-contract
+// payload) falls back to the monitoring sk-key's billing effective for a.Group,
+// preserving the legacy single-row behavior.
+func (a *Adapter) modelsFromChannels(channels []availableChannel, effective float64, peakInfo string, loc *time.Location) []normalize.Sub2APIModel {
 	seen := make(map[string]bool)
 	out := []normalize.Sub2APIModel{}
+	now := a.nowTime()
 	for _, ch := range channels {
 		for _, p := range ch.Platforms {
 			for _, m := range p.SupportedModels {
-				if seen[m.Name] {
+				base := channelModelBase(m)
+				if len(p.Groups) == 0 {
+					grp := a.Group
+					if grp == "" {
+						grp = "default"
+					}
+					key := m.Name + "\x00" + grp
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					sm := base
+					sm.Name, sm.Group = m.Name, grp
+					sm.ResolvedRateMultiplier = effective
+					sm.AppliedPeakMultiplier = 1.0
+					sm.PeakInfo = peakInfo
+					out = append(out, sm)
 					continue
 				}
-				seen[m.Name] = true
-				sm := normalize.Sub2APIModel{
-					Name: m.Name, Group: a.Group,
-					ResolvedRateMultiplier: effective, AppliedPeakMultiplier: 1.0,
-					PeakInfo: peakInfo,
+				for _, g := range p.Groups {
+					if g.RateMultiplier <= 0 {
+						continue
+					}
+					key := m.Name + "\x00" + g.Name
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					peak := peakMultiplierAt(now, g, loc)
+					sm := base
+					sm.Name, sm.Group = m.Name, g.Name
+					sm.ResolvedRateMultiplier = g.RateMultiplier
+					sm.AppliedPeakMultiplier = peak
+					sm.PeakInfo = formatPeakGroup(g)
+					out = append(out, sm)
 				}
-				if m.Pricing != nil {
-					if m.Pricing.InputPrice != nil {
-						sm.InputCostPerToken = *m.Pricing.InputPrice
-					}
-					if m.Pricing.OutputPrice != nil {
-						sm.OutputCostPerToken = *m.Pricing.OutputPrice
-					}
-					if m.Pricing.CacheReadPrice != nil {
-						sm.CacheReadCostPerToken = *m.Pricing.CacheReadPrice
-					}
-					if m.Pricing.CacheWritePrice != nil {
-						sm.CacheWriteCostPerToken = *m.Pricing.CacheWritePrice
-					}
-					sm.BasePriceKnown = m.Pricing.InputPrice != nil
-				}
-				out = append(out, sm)
 			}
 		}
 	}
 	return out
+}
+
+// channelModelBase extracts the per-token USD base prices from a supported
+// model's pricing into a Sub2APIModel shell (Name/Group/multipliers set by the
+// caller). BasePriceKnown is true only when an input price was reported, which
+// gates whether USD/1M is derivable at all.
+func channelModelBase(m supportedModel) normalize.Sub2APIModel {
+	sm := normalize.Sub2APIModel{}
+	if m.Pricing != nil {
+		if m.Pricing.InputPrice != nil {
+			sm.InputCostPerToken = *m.Pricing.InputPrice
+		}
+		if m.Pricing.OutputPrice != nil {
+			sm.OutputCostPerToken = *m.Pricing.OutputPrice
+		}
+		if m.Pricing.CacheReadPrice != nil {
+			sm.CacheReadCostPerToken = *m.Pricing.CacheReadPrice
+		}
+		if m.Pricing.CacheWritePrice != nil {
+			sm.CacheWriteCostPerToken = *m.Pricing.CacheWritePrice
+		}
+		sm.BasePriceKnown = m.Pricing.InputPrice != nil
+	}
+	return sm
+}
+
+// peakMultiplierAt mirrors sub2api Group.PeakMultiplierAt: peak only applies to
+// subscription-type groups during the same-day [PeakStart, PeakEnd) window
+// (HH:MM, evaluated in the station's timezone). Returns 1.0 outside the window
+// or for non-subscription / non-peak groups. (sub2api normalizes peak config so
+// only subscription groups can carry an enabled peak; the subscription gate here
+// is belt-and-suspenders.)
+func peakMultiplierAt(now time.Time, g availableGroupRef, loc *time.Location) float64 {
+	if g.SubscriptionType != "subscription" || !g.PeakRateEnabled || g.PeakStart == "" || g.PeakEnd == "" {
+		return 1.0
+	}
+	start, ok1 := parseHHMM(g.PeakStart)
+	end, ok2 := parseHHMM(g.PeakEnd)
+	if !ok1 || !ok2 || start >= end {
+		return 1.0
+	}
+	if loc == nil {
+		loc = time.Local
+	}
+	t := now.In(loc)
+	cur := t.Hour()*60 + t.Minute()
+	if cur >= start && cur < end {
+		return g.PeakRateMultiplier
+	}
+	return 1.0
+}
+
+// parseHHMM parses "HH:MM" into minutes-of-day. Mirrors sub2api parseMinutes.
+func parseHHMM(hhmm string) (int, bool) {
+	colon := strings.IndexByte(hhmm, ':')
+	if (colon != 1 && colon != 2) || len(hhmm)-colon-1 != 2 {
+		return 0, false
+	}
+	h := 0
+	for i := 0; i < colon; i++ {
+		d := hhmm[i] - '0'
+		if d > 9 {
+			return 0, false
+		}
+		h = h*10 + int(d)
+	}
+	m1, m2 := hhmm[colon+1]-'0', hhmm[colon+2]-'0'
+	if m1 > 9 || m2 > 9 {
+		return 0, false
+	}
+	m := int(m1)*10 + int(m2)
+	if h > 23 || m > 59 {
+		return 0, false
+	}
+	return h*60 + m, true
+}
+
+// formatPeakGroup renders a group ref's peak window for the PeakInfo note.
+func formatPeakGroup(g availableGroupRef) string {
+	if g.SubscriptionType != "subscription" || !g.PeakRateEnabled || g.PeakStart == "" || g.PeakEnd == "" {
+		return ""
+	}
+	return fmt.Sprintf("peak %s-%s x%v", g.PeakStart, g.PeakEnd, g.PeakRateMultiplier)
 }
