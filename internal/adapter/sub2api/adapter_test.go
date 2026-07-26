@@ -396,6 +396,66 @@ func TestFetchRatios_ChannelsOnlyNoSkKey(t *testing.T) {
 	}
 }
 
+// TestFetchRatios_ExpandByGroupRatios: channels/available has no groups[] (feature
+// flag off), but groups/available reports multiple groups with rate_multipliers.
+// Models should be expanded into per-group rows using groups/available rates,
+// NOT left in a single "default" group at billing effective.
+func TestFetchRatios_ExpandByGroupRatios(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/sub2api/billing", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, billingResp{EffectiveRateMultiplier: 0.15, GroupRateMultiplier: 0.15})
+	})
+	mux.HandleFunc("/api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"code": 0, "data": map[string]string{"access_token": "jwt-1"}})
+	})
+	mux.HandleFunc("/api/v1/groups/available", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"code":0,"data":[{"name":"default","rate_multiplier":0.15,"status":"active"},{"name":"kiro-低缓","rate_multiplier":0.145,"status":"active"},{"name":"team","rate_multiplier":0.1,"status":"active"}]}`)
+	})
+	// channels/available returns models WITHOUT groups[] (feature flag off)
+	mux.HandleFunc("/api/v1/channels/available", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"success":true,"data":[{"name":"c1","platforms":[{"platform":"anthropic","supported_models":[{"name":"gpt-4o-mini","pricing":{"input_price":1.5e-7,"output_price":6e-7}}]}]}]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a := New("s1", srv.URL, "sk-1", "jwt-1", "", "a@b.com", "pw", "default", srv.Client())
+	a.SetClock(func() time.Time { return time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC) })
+	caps, _ := a.ProbeCapabilities(context.Background())
+	_, obs, err := a.FetchRatios(context.Background(), caps)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	// Should have 3 rows: one per group from groups/available.
+	groups := map[string]bool{}
+	for _, o := range obs {
+		if o.ModelName == "gpt-4o-mini" {
+			groups[o.GroupName] = true
+		}
+	}
+	if len(groups) != 3 {
+		t.Fatalf("want 3 groups, got %d: %v", len(groups), groups)
+	}
+	// kiro-低缓 group: 1.5e-7 × 1e6 × 0.145 = 0.0217500
+	kiro, ok := findObsGroup(obs, "gpt-4o-mini", "kiro-低缓")
+	if !ok {
+		t.Fatal("kiro-低缓 row missing")
+	}
+	if !eq(kiro.InputUSDPer1M, 0.02175) {
+		t.Errorf("kiro-低缓 input: want 0.02175 got %v", kiro.InputUSDPer1M)
+	}
+	if !eq(kiro.NativeRatio, 0.145) {
+		t.Errorf("kiro-低缓 native_ratio: want 0.145 got %v", kiro.NativeRatio)
+	}
+	// team group: 1.5e-7 × 1e6 × 0.1 = 0.015
+	team, ok := findObsGroup(obs, "gpt-4o-mini", "team")
+	if !ok {
+		t.Fatal("team row missing")
+	}
+	if !eq(team.InputUSDPer1M, 0.015) {
+		t.Errorf("team input: want 0.015 got %v", team.InputUSDPer1M)
+	}
+}
+
 // TestReactiveJWTRetry: a fingerprint-stale JWT (401 on channels/available)
 // must trigger a re-login and retry, so per-model data is recovered without
 // waiting for the 24h exp-based refresh.
