@@ -354,10 +354,18 @@ button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .tab-btn{padding:.5rem 1.2rem;text-decoration:none;color:var(--fg-2);font-weight:500;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s}
 .tab-btn:hover{color:var(--fg);background:var(--bg-2);border-radius:6px 6px 0 0}
 .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
-#rules-table{width:100%}
-#rules-table input,#rules-table select{font-size:.85rem}
-#rules-table td{padding:.35rem .25rem;vertical-align:middle}
-#rules-table th{padding:.35rem .25rem;text-align:left;font-size:.8rem;color:var(--fg-2)}
+.rule-card{padding:.9rem 1rem;margin-bottom:.6rem}
+.rule-fields{display:grid;grid-template-columns:1.5fr 1.5fr .7fr 1fr .5fr auto;gap:.7rem;align-items:end}
+.rule-f-del{display:flex;align-items:end}
+.rule-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem}
+.toggle{position:relative;display:inline-block;width:40px;height:22px}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:22px;transition:.2s}
+.toggle-slider:before{content:'';position:absolute;height:16px;width:16px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s}
+.toggle input:checked+.toggle-slider{background:var(--primary)}
+.toggle input:checked+.toggle-slider:before{transform:translateX(18px)}
+@media(max-width:768px){.rule-fields{grid-template-columns:1fr 1fr;gap:.5rem}}
+@media(max-width:480px){.rule-fields{grid-template-columns:1fr;gap:.4rem}}
 `
 
 type navItem struct{ H, Label, Key string }

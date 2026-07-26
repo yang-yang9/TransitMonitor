@@ -131,7 +131,7 @@ function tmSettingsTest(kind){
 </script>`)
 }
 
-// settingsRulesTab renders the alert rules editor table.
+// settingsRulesTab renders the alert rules editor.
 func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang string) {
 	var rules []alert.Rule
 	if m, ok := s.mgr.(interface {
@@ -141,17 +141,7 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 	}
 
 	b.w(`<p class="sub meta">` + t(lang, "sub.rules") + `</p>`)
-	b.w(`<div class="card"><div id="rules-editor">`)
-
-	// Table header
-	b.w(`<table class="tbl" id="rules-table"><thead><tr>`)
-	b.w(`<th>` + t(lang, "form.rule.name") + `</th>`)
-	b.w(`<th>` + t(lang, "form.rule.type") + `</th>`)
-	b.w(`<th>` + t(lang, "form.rule.threshold") + `</th>`)
-	b.w(`<th>` + t(lang, "form.rule.direction") + `</th>`)
-	b.w(`<th>` + t(lang, "form.rule.enabled") + `</th>`)
-	b.w(`<th></th>`)
-	b.w(`</tr></thead><tbody id="rules-body">`)
+	b.w(`<div id="rules-editor">`)
 
 	typeOptions := []struct{ val, label string }{
 		{"delta_pct", "delta_pct"},
@@ -172,6 +162,8 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 		{"down", t(lang, "form.rule.dir.down")},
 	}
 
+	delLabel := t(lang, "btn.delete_rule")
+
 	renderRow := func(r alert.Rule) {
 		dir := r.Direction
 		if dir == "" {
@@ -181,9 +173,14 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 		if r.Enabled {
 			chk = " checked"
 		}
-		b.w(`<tr class="rule-row">`)
-		b.w(`<td><input class="r-name" value="` + esc(r.Name) + `" style="width:100%"></td>`)
-		b.w(`<td><select class="r-type">`)
+		b.w(`<div class="rule-card card">`)
+		b.w(`<div class="rule-fields">`)
+		// name
+		b.w(`<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") + `</span>`)
+		b.w(`<input class="r-name" value="` + esc(r.Name) + `"></div>`)
+		// type
+		b.w(`<div class="field rule-f-type"><span class="field-label">` + t(lang, "form.rule.type") + `</span>`)
+		b.w(`<select class="r-type">`)
 		for _, o := range typeOptions {
 			sel := ""
 			if o.val == r.Type {
@@ -191,9 +188,13 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 			}
 			b.w(`<option value="` + o.val + `"` + sel + `>` + o.label + `</option>`)
 		}
-		b.w(`</select></td>`)
-		b.w(`<td><input class="r-threshold" type="number" step="any" min="0" value="` + fmt.Sprintf("%g", r.Threshold) + `" style="width:80px"></td>`)
-		b.w(`<td><select class="r-direction">`)
+		b.w(`</select></div>`)
+		// threshold
+		b.w(`<div class="field rule-f-thr"><span class="field-label">` + t(lang, "form.rule.threshold") + `</span>`)
+		b.w(`<input class="r-threshold" type="number" step="any" min="0" value="` + fmt.Sprintf("%g", r.Threshold) + `"></div>`)
+		// direction
+		b.w(`<div class="field rule-f-dir"><span class="field-label">` + t(lang, "form.rule.direction") + `</span>`)
+		b.w(`<select class="r-direction">`)
 		for _, o := range dirOptions {
 			sel := ""
 			if o.val == dir {
@@ -201,26 +202,31 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 			}
 			b.w(`<option value="` + o.val + `"` + sel + `>` + esc(o.label) + `</option>`)
 		}
-		b.w(`</select></td>`)
-		b.w(`<td><input class="r-enabled" type="checkbox"` + chk + `></td>`)
-		b.w(`<td><button type="button" class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()">` + t(lang, "btn.delete_rule") + `</button></td>`)
-		b.w(`</tr>`)
+		b.w(`</select></div>`)
+		// enabled toggle
+		b.w(`<div class="field rule-f-en"><span class="field-label">` + t(lang, "form.rule.enabled") + `</span>`)
+		b.w(`<label class="toggle"><input class="r-enabled" type="checkbox"` + chk + `><span class="toggle-slider"></span></label></div>`)
+		// delete
+		b.w(`<div class="field rule-f-del"><span class="field-label">&nbsp;</span>`)
+		b.w(`<button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.rule-card').remove()">` + delLabel + `</button></div>`)
+		b.w(`</div></div>`)
 	}
 
+	b.w(`<div id="rules-body">`)
 	for _, r := range rules {
 		renderRow(r)
 	}
-	b.w(`</tbody></table>`)
+	b.w(`</div>`)
 
-	b.w(`<div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap">`)
-	b.w(`<button type="button" class="btn btn-sm" onclick="tmAddRule()">` + t(lang, "btn.add_rule") + `</button>`)
+	b.w(`<div class="rule-actions">`)
+	b.w(`<button type="button" class="btn btn-sm" onclick="tmAddRule()">+ ` + t(lang, "btn.add_rule") + `</button>`)
 	b.w(`<button type="button" class="btn btn-sm btn-outline" onclick="tmResetRules()">` + t(lang, "btn.reset_rules") + `</button>`)
 	b.w(`<button type="button" class="btn" onclick="tmSaveRules()">` + t(lang, "btn.save_rules") + `</button>`)
 	b.w(`</div>`)
 
-	b.w(`</div></div>`)
+	b.w(`</div>`)
 
-	// Template row for JS add
+	// JS options arrays
 	typeOptsJS := "["
 	for i, o := range typeOptions {
 		if i > 0 {
@@ -242,26 +248,28 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 var _typeOpts=` + typeOptsJS + `;
 var _dirOpts=` + dirOptsJS + `;
 function tmAddRule(){
-  var tb=document.getElementById('rules-body');
-  var tr=document.createElement('tr');tr.className='rule-row';
-  tr.innerHTML='<td><input class="r-name" style="width:100%"></td>'
-    +'<td><select class="r-type">'+_typeOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></td>'
-    +'<td><input class="r-threshold" type="number" step="any" min="0" value="5" style="width:80px"></td>'
-    +'<td><select class="r-direction">'+_dirOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></td>'
-    +'<td><input class="r-enabled" type="checkbox" checked></td>'
-    +'<td><button type="button" class="btn btn-sm btn-danger" onclick="this.closest(\'tr\').remove()">` + t(lang, "btn.delete_rule") + `</button></td>';
-  tb.appendChild(tr);
+  var body=document.getElementById('rules-body');
+  var card=document.createElement('div');card.className='rule-card card';
+  card.innerHTML='<div class="rule-fields">'
+    +'<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") + `</span><input class="r-name"></div>'
+    +'<div class="field rule-f-type"><span class="field-label">` + t(lang, "form.rule.type") + `</span><select class="r-type">'+_typeOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></div>'
+    +'<div class="field rule-f-thr"><span class="field-label">` + t(lang, "form.rule.threshold") + `</span><input class="r-threshold" type="number" step="any" min="0" value="5"></div>'
+    +'<div class="field rule-f-dir"><span class="field-label">` + t(lang, "form.rule.direction") + `</span><select class="r-direction">'+_dirOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></div>'
+    +'<div class="field rule-f-en"><span class="field-label">` + t(lang, "form.rule.enabled") + `</span><label class="toggle"><input class="r-enabled" type="checkbox" checked><span class="toggle-slider"></span></label></div>'
+    +'<div class="field rule-f-del"><span class="field-label">&nbsp;</span><button type="button" class="btn btn-sm btn-danger" onclick="this.closest(\'.rule-card\').remove()">` + delLabel + `</button></div>'
+    +'</div>';
+  body.appendChild(card);
 }
 function tmCollectRules(){
-  var rows=document.querySelectorAll('#rules-body .rule-row');
+  var cards=document.querySelectorAll('#rules-body .rule-card');
   var rules=[];
-  rows.forEach(function(tr){
+  cards.forEach(function(c){
     rules.push({
-      name: tr.querySelector('.r-name').value,
-      type: tr.querySelector('.r-type').value,
-      threshold: parseFloat(tr.querySelector('.r-threshold').value)||0,
-      direction: tr.querySelector('.r-direction').value,
-      enabled: tr.querySelector('.r-enabled').checked
+      name: c.querySelector('.r-name').value,
+      type: c.querySelector('.r-type').value,
+      threshold: parseFloat(c.querySelector('.r-threshold').value)||0,
+      direction: c.querySelector('.r-direction').value,
+      enabled: c.querySelector('.r-enabled').checked
     });
   });
   return rules;
