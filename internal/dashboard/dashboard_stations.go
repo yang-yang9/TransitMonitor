@@ -21,6 +21,7 @@ import (
 type StationManager interface {
 	AddStation(domain.Station) error
 	RemoveStation(string) error
+	ReorderStations([]string) error
 	Stations() []domain.Station
 }
 
@@ -59,7 +60,17 @@ func (s *Server) findStation(id string) (domain.Station, bool) {
 func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
 	sts := s.stationsList()
-	rows := make([][]string, 0, len(sts))
+
+	var tbl strings.Builder
+	tbl.WriteString(`<div class="tbl-wrap"><table><thead><tr>`)
+	tbl.WriteString(`<th></th>`) // drag handle column
+	for _, c := range []string{t(lang, "form.id"), t(lang, "form.name"), t(lang, "form.kind"), t(lang, "form.baseurl"), t(lang, "form.enabled"), ""} {
+		tbl.WriteString("<th>" + esc(c) + "</th>")
+	}
+	tbl.WriteString("</tr></thead><tbody id=\"tm-st-body\">")
+	if len(sts) == 0 {
+		tbl.WriteString(`<tr><td colspan="7"><div class="empty">` + t(lang, "empty") + `</div></td></tr>`)
+	}
 	for _, st := range sts {
 		enabled := `<span class="badge b-ok">` + t(lang, "form.enabled") + `</span>`
 		if !st.Enabled {
@@ -71,17 +82,55 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 		}
 		edit := `<a class="btn btn-outline btn-sm" href="/stations/` + esc(st.ID) + `/edit">` + t(lang, "form.edit") + `</a> <button class="btn btn-outline btn-sm" onclick="fetch('/api/stations/` + esc(st.ID) + `/poll',{method:'POST'}).then(function(){location.reload();})">🔄 ` + t(lang, "form.poll") + `</button>`
 		del := `<button class="btn btn-danger btn-sm" onclick="tmDel('` + esc(st.ID) + `')">` + t(lang, "form.delete") + `</button>`
-		rows = append(rows, []string{
-			`<span class="mono">` + esc(st.ID) + `</span>`, nameCell,
-			`<span class="tag tag-pri">` + esc(string(st.Kind)) + `</span>`,
-			`<span class="mono" style="font-size:.8rem">` + esc(st.BaseURL) + `</span>`, enabled,
-			`<div style="display:flex;gap:.4rem">` + edit + ` ` + del + `</div>`,
-		})
+		tbl.WriteString(`<tr draggable="true" data-id="` + esc(st.ID) + `">`)
+		tbl.WriteString(`<td class="drag-handle" title="` + esc(t(lang, "form.drag_hint")) + `">☰</td>`)
+		tbl.WriteString(`<td><span class="mono">` + esc(st.ID) + `</span></td>`)
+		tbl.WriteString(`<td>` + nameCell + `</td>`)
+		tbl.WriteString(`<td><span class="tag tag-pri">` + esc(string(st.Kind)) + `</span></td>`)
+		tbl.WriteString(`<td><span class="mono" style="font-size:.8rem">` + esc(st.BaseURL) + `</span></td>`)
+		tbl.WriteString(`<td>` + enabled + `</td>`)
+		tbl.WriteString(`<td><div style="display:flex;gap:.4rem">` + edit + ` ` + del + `</div></td>`)
+		tbl.WriteString(`</tr>`)
 	}
+	tbl.WriteString("</tbody></table></div>")
+
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.stations") + `</h1>` +
 		`<p class="sub"><a class="btn" href="/stations/new">+ ` + t(lang, "title.newstation") + `</a></p></div>` +
-		renderTable(lang, []string{t(lang, "form.id"), t(lang, "form.name"), t(lang, "form.kind"), t(lang, "form.baseurl"), t(lang, "form.enabled"), ""}, rows) +
-		`<script>function tmDel(id){tmConfirm('` + t(lang, "form.confirm") + `',function(){fetch('/api/stations/'+id,{method:'DELETE'}).then(function(){location.reload();});});}</script>`
+		tbl.String() +
+		`<script>
+function tmDel(id){tmConfirm('` + t(lang, "form.confirm") + `',function(){fetch('/api/stations/'+id,{method:'DELETE'}).then(function(){location.reload();});});}
+(function(){
+var tb=document.getElementById('tm-st-body');if(!tb)return;
+var drag=null;
+tb.addEventListener('dragstart',function(e){
+  var tr=e.target.closest('tr[data-id]');if(!tr)return;
+  drag=tr;tr.classList.add('dragging');
+  e.dataTransfer.effectAllowed='move';
+  e.dataTransfer.setData('text/plain',tr.dataset.id);
+});
+tb.addEventListener('dragend',function(e){
+  if(drag)drag.classList.remove('dragging');drag=null;
+  [].forEach.call(tb.querySelectorAll('.drag-over'),function(r){r.classList.remove('drag-over');});
+});
+tb.addEventListener('dragover',function(e){
+  e.preventDefault();e.dataTransfer.dropEffect='move';
+  var tr=e.target.closest('tr[data-id]');if(!tr||tr===drag)return;
+  [].forEach.call(tb.querySelectorAll('.drag-over'),function(r){r.classList.remove('drag-over');});
+  tr.classList.add('drag-over');
+});
+tb.addEventListener('drop',function(e){
+  e.preventDefault();
+  var target=e.target.closest('tr[data-id]');if(!target||!drag||target===drag)return;
+  var rect=target.getBoundingClientRect();
+  var mid=rect.top+rect.height/2;
+  if(e.clientY<mid){tb.insertBefore(drag,target);}
+  else{tb.insertBefore(drag,target.nextSibling);}
+  var ids=[];
+  [].forEach.call(tb.querySelectorAll('tr[data-id]'),function(r){ids.push(r.dataset.id);});
+  fetch('/api/stations/order',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids})});
+});
+})();
+</script>`
 	s.writeHTMLShell(w, lang, t(lang, "title.stations"), "stations", body)
 }
 
@@ -187,7 +236,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			for _, h := range hist {
 				vals = append(vals, h.RemainingUSD)
 			}
-			balSpark = sparklineSVG(vals, 240, 40, "$%.2f")
+			balSpark = sparklineSVG(vals, 240, 40, fmtUSDTip)
 		}
 		remStr := fmt.Sprintf("$%.2f", bal.RemainingUSD)
 		if bal.Unlimited {
@@ -246,7 +295,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 					deltaStr = fmt.Sprintf(`<span class="sc-delta badge-sm b-warn">%s%.1f%%</span>`, sign, dp)
 				}
 			}
-			svg := sparklineSVG(vals, 120, 32, "%.6fx")
+			svg := sparklineSVG(vals, 120, 32, func(v float64) string { return fmt.Sprintf("%.6fx", v) })
 			trendHTML += fmt.Sprintf(`<div class="spark-cell"><div class="sc-hdr"><span class="sc-name" title="%s">%s</span><span class="sc-val">%.2fx</span></div>%s%s</div>`,
 				esc(g), esc(g), cur, svg, deltaStr)
 		}
@@ -576,10 +625,29 @@ func (s *Server) stationsDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+// PUT /api/stations/order — reorder stations by drag-and-drop.
+func (s *Server) stationsReorder(w http.ResponseWriter, r *http.Request) {
+	if s.mgr == nil {
+		http.Error(w, "station manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.IDs) == 0 {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := s.mgr.ReorderStations(req.IDs); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(204)
+}
+
 // sparklineSVG renders a mini SVG line chart from values (for the station detail page).
-// tipFmt is the per-point hover-tooltip format (e.g. "%.6fx" for ratio
-// multipliers, "$%.2f" for USD balances). It must contain exactly one verb.
-func sparklineSVG(vals []float64, w, h int, tipFmt string) string {
+// tipFn formats each value for the hover tooltip.
+func sparklineSVG(vals []float64, w, h int, tipFn func(float64) string) string {
 	if len(vals) < 2 || h <= 0 || w <= 0 {
 		return ""
 	}
@@ -615,7 +683,7 @@ func sparklineSVG(vals []float64, w, h int, tipFmt string) string {
 	b.WriteString(`</svg>`)
 	fmt.Fprintf(&b, `<div class="spark-dots" style="grid-template-columns:repeat(%d,1fr)">`, len(points))
 	for _, p := range points {
-		fmt.Fprintf(&b, `<span class="spark-dot" data-tip="`+tipFmt+`"></span>`, p.v)
+		fmt.Fprintf(&b, `<span class="spark-dot" data-tip="%s"></span>`, esc(tipFn(p.v)))
 	}
 	b.WriteString(`</div></div>`)
 	return b.String()

@@ -96,6 +96,32 @@ func (s *Server) stationName(id string) string {
 	return id
 }
 
+// stationSelect renders a styled station switcher for a per-station page
+// (/changes, /probes). preserve holds extra query params to carry across the
+// switch (e.g. tab=group on /changes). Each option's value is the full target
+// URL, so the onchange handler just navigates to this.value — no JS string
+// interpolation of user-controlled input, so it's XSS-safe.
+func (s *Server) stationSelect(lang, path, current string, preserve url.Values) string {
+	var b strings.Builder
+	b.WriteString(`<span class="field" style="display:inline-flex;flex-direction:row;align-items:center;gap:.45rem;flex:0 0 auto">`)
+	b.WriteString(`<span class="field-label">` + t(lang, "col.station") + `</span>`)
+	b.WriteString(`<select onchange="if(this.value)location.href=this.value">`)
+	for _, st := range s.stationsList() {
+		q := url.Values{}
+		q.Set("station", st.ID)
+		for k, vs := range preserve {
+			q[k] = append(q[k], vs...)
+		}
+		sel := ""
+		if st.ID == current {
+			sel = " selected"
+		}
+		b.WriteString(fmt.Sprintf(`<option value="%s"%s>%s</option>`, esc(path+"?"+q.Encode()), sel, esc(st.Name)))
+	}
+	b.WriteString(`</select></span>`)
+	return b.String()
+}
+
 func sortedModels(set map[string]bool) []string {
 	out := make([]string, 0, len(set))
 	for m := range set {
@@ -159,7 +185,10 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 		}
 		return fmt.Sprintf(`<a class="%s" href="/changes?station=%s&tab=%s&_=%s">%s</a> `, cls, esc(station), key, matrixVer, t(lang, labelKey))
 	}
-	tabs := `<div class="field-sel">` + tabBtn("all", "btn.taball") + tabBtn("group", "btn.tabgroup") + tabBtn("model", "btn.tabmodel") + `</div>`
+	tabs := `<div class="field-sel matrix-bar">` +
+		`<span class="bar-seg">` + s.stationSelect(lang, "/changes", station, url.Values{"tab": {tab}}) + `</span>` +
+		`<span class="bar-sep"></span><span class="bar-seg">` + tabBtn("all", "btn.taball") + tabBtn("group", "btn.tabgroup") + tabBtn("model", "btn.tabmodel") + `</span>` +
+		`</div>`
 	pageRows, pg := paginateRows(lang, "/changes", "page", r.URL.Query(), rows)
 	// slice timestamps/severities in sync with paginateRows
 	total := len(rows)
@@ -227,6 +256,7 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 	pageRows, pg := paginateRows(lang, "/probes", "page", r.URL.Query(), rows)
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.probes") + `</h1><p class="sub">` +
 		fmt.Sprintf(t(lang, "sub.probes"), stag) + `</p></div>` +
+		`<div class="field-sel matrix-bar"><span class="bar-seg">` + s.stationSelect(lang, "/probes", station, nil) + `</span></div>` +
 		renderTable(lang, []string{
 			t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.tokinout"),
 			t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"),
@@ -739,6 +769,32 @@ func sevRank(s string) int {
 }
 
 func fmtUSD(v float64) string { return fmt.Sprintf("%.4f", v) }
+
+func fmtUSDTip(v float64) string {
+	s := fmt.Sprintf("%.2f", v)
+	parts := strings.SplitN(s, ".", 2)
+	intPart := parts[0]
+	neg := ""
+	if strings.HasPrefix(intPart, "-") {
+		neg = "-"
+		intPart = intPart[1:]
+	}
+	n := len(intPart)
+	if n > 3 {
+		var chunks []string
+		for n > 0 {
+			end := n
+			start := n - 3
+			if start < 0 {
+				start = 0
+			}
+			chunks = append([]string{intPart[start:end]}, chunks...)
+			n = start
+		}
+		intPart = strings.Join(chunks, ",")
+	}
+	return "$" + neg + intPart + "." + parts[1]
+}
 func fmtPct(v float64) string { return fmt.Sprintf("%.2f%%", v) }
 
 func fieldVal(field string, o domain.RatioObservation) float64 {
@@ -818,7 +874,7 @@ func (s *Server) balanceHTML(w http.ResponseWriter, r *http.Request) {
 			for _, h := range hist {
 				vals = append(vals, h.RemainingUSD)
 			}
-			spark = sparklineSVG(vals, 120, 32, "$%.2f")
+			spark = sparklineSVG(vals, 120, 32, fmtUSDTip)
 		}
 		rows = append(rows, row{station: st.ID, name: st.Name, ob: ob, has: true, spark: spark})
 	}
