@@ -179,6 +179,10 @@ func main() {
 	if err := sched.ReloadNotifiers(context.Background()); err != nil {
 		logger.Warn("notifier reload", "err", err)
 	}
+	sched.SetBaseRules(cfg.Alerts.Rules)
+	if err := sched.LoadRules(context.Background()); err != nil {
+		logger.Warn("load alert rules", "err", err)
+	}
 	sched.Prober = probe.NewProber(httpClient)
 
 	_ = st.InsertAuditLog(context.Background(), "main", "startup", "",

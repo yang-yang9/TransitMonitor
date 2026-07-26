@@ -103,8 +103,11 @@ func New(stations []domain.Station, st *store.Store, token, password string) *Se
 	r.Put("/api/stations/order", s.stationsReorder)
 	r.Post("/api/stations/{id}/poll", s.stationsPoll)
 	r.Post("/api/stations/{id}/login", s.stationsLogin)
+	r.Post("/stations/{id}/groups", s.stationGroupSettingsSave)
 	r.Post("/api/settings", s.settingsSave)
 	r.Post("/api/settings/test", s.settingsTest)
+	r.Post("/api/settings/rules", s.settingsRulesSave)
+	r.Post("/api/settings/rules/reset", s.settingsRulesReset)
 	r.Get("/api/system/version", s.systemVersionJSON)
 	r.Get("/api/system/check-updates", s.systemCheckUpdatesJSON)
 	r.Get("/api/system/rollback-versions", s.systemRollbackVersionsJSON)
@@ -499,7 +502,9 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 			name = st.ID
 		}
 		grs, _ := s.store.LatestGroupRatios(ctx, st.ID)
-		chart := groupRatioChart(grs, false)
+		cfgs, _ := s.store.GetStationGroupConfigs(ctx, st.ID)
+		visible, hidden := domain.SplitVisible(domain.PartitionGroups(grs, cfgs))
+		chart := groupRatioChart(visible, false) + renderHiddenGroupsExpander(lang, hidden)
 		// recent group-ratio change hint
 		changeHint := ""
 		if evs, _ := s.store.ListChangeEvents(ctx, st.ID, 20); len(evs) > 0 {

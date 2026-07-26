@@ -92,6 +92,15 @@ func findObs(obs []domain.RatioObservation, model string) (domain.RatioObservati
 	return domain.RatioObservation{}, false
 }
 
+func findObsGroup(obs []domain.RatioObservation, model, group string) (domain.RatioObservation, bool) {
+	for _, o := range obs {
+		if o.ModelName == model && o.GroupName == group {
+			return o, true
+		}
+	}
+	return domain.RatioObservation{}, false
+}
+
 func eq(a, b float64) bool {
 	d := a - b
 	if d < 0 {
@@ -108,6 +117,10 @@ func oneModel(name string, in, out float64) supportedModel {
 			OutputPrice: ptrF(out),
 		},
 	}
+}
+
+func oneGroup(name string, rate float64) availableGroupRef {
+	return availableGroupRef{Name: name, RateMultiplier: rate}
 }
 
 func TestProbeCapabilities(t *testing.T) {
@@ -240,6 +253,146 @@ func TestFetchRatios_NoSource(t *testing.T) {
 	_, _, err := a.FetchRatios(context.Background(), caps)
 	if err == nil {
 		t.Fatal("FetchRatios should error when no ratio source")
+	}
+}
+
+// TestFetchRatios_PerGroupDiscount is the core discount-adaptation test: the
+// monitoring sk-key sits in a 1.0 (full-price) group, but the station exposes a
+// 0.25 discount group. Each model must be priced per-group at that group's own
+// rate_multiplier — NOT at the sk-key's billing effective (1.0) — so the
+// discount group surfaces a discounted USD/1M instead of the original price.
+func TestFetchRatios_PerGroupDiscount(t *testing.T) {
+	_, a := startMock(t, mockCfg{
+		apiKey: "sk-1", jwt: "jwt-1", group: "default",
+		billing: &billingResp{EffectiveRateMultiplier: 1.0, GroupRateMultiplier: 1.0},
+		channels: []availableChannel{{Name: "c1", Platforms: []platformSection{{
+			Platform: "anthropic",
+			Groups: []availableGroupRef{
+				oneGroup("default", 1.0),
+				oneGroup("discount", 0.25),
+			},
+			SupportedModels: []supportedModel{oneModel("gpt-4o-mini", 1.5e-7, 6e-7)},
+		}}}},
+	})
+	caps, _ := a.ProbeCapabilities(context.Background())
+	_, obs, err := a.FetchRatios(context.Background(), caps)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	disc, ok := findObsGroup(obs, "gpt-4o-mini", "discount")
+	if !ok {
+		t.Fatal("discount-group row missing")
+	}
+	// 1.5e-7 × 1e6 × 0.25 = 0.0375 — discount applied, NOT 1.0 (original).
+	if !eq(disc.InputUSDPer1M, 0.0375) {
+		t.Errorf("discount input: want 0.0375 got %v", disc.InputUSDPer1M)
+	}
+	if !eq(disc.NativeRatio, 0.25) {
+		t.Errorf("discount native ratio: want 0.25 got %v", disc.NativeRatio)
+	}
+	full, ok := findObsGroup(obs, "gpt-4o-mini", "default")
+	if !ok {
+		t.Fatal("default-group row missing")
+	}
+	if !eq(full.InputUSDPer1M, 0.15) { // 1.5e-7 × 1e6 × 1.0
+		t.Errorf("default input: want 0.15 got %v", full.InputUSDPer1M)
+	}
+}
+
+// TestFetchRatios_PerGroupPeak: a subscription group with peak 09:00-12:00 ×1.5,
+// clock 10:00 UTC (in-window, station tz UTC) → eff = 0.25 × 1.5 = 0.375. Peak
+// is computed from the per-group config, not the sk-key's billing effective.
+func TestFetchRatios_PerGroupPeak(t *testing.T) {
+	_, a := startMock(t, mockCfg{
+		apiKey: "sk-1", jwt: "jwt-1", group: "sub",
+		billing: &billingResp{EffectiveRateMultiplier: 1.0, GroupRateMultiplier: 1.0, Timezone: ptrS("UTC")},
+		channels: []availableChannel{{Name: "c1", Platforms: []platformSection{{
+			Platform: "anthropic",
+			Groups: []availableGroupRef{{
+				Name: "sub", SubscriptionType: "subscription", RateMultiplier: 0.25,
+				PeakRateEnabled: true, PeakStart: "09:00", PeakEnd: "12:00", PeakRateMultiplier: 1.5,
+			}},
+			SupportedModels: []supportedModel{oneModel("gpt-4o-mini", 1.5e-7, 6e-7)},
+		}}}},
+	})
+	a.SetClock(func() time.Time { return time.Date(2026, 7, 21, 10, 0, 0, 0, time.UTC) })
+	caps, _ := a.ProbeCapabilities(context.Background())
+	_, obs, err := a.FetchRatios(context.Background(), caps)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	m, _ := findObsGroup(obs, "gpt-4o-mini", "sub")
+	// 1.5e-7 × 1e6 × 0.25 × 1.5 = 0.05625
+	if !eq(m.InputUSDPer1M, 0.05625) {
+		t.Errorf("peak input: want 0.05625 got %v", m.InputUSDPer1M)
+	}
+	if !eq(m.NativeRatio, 0.375) {
+		t.Errorf("native ratio (rate×peak): want 0.375 got %v", m.NativeRatio)
+	}
+	if m.PeakInfo == "" {
+		t.Error("peak_info should be non-empty")
+	}
+}
+
+// TestFetchRatios_PerGroupPeakOutsideWindow: same peak config, clock 12:00 UTC
+// (exclusive end) → peak NOT applied → eff = 0.25 (group rate only).
+func TestFetchRatios_PerGroupPeakOutsideWindow(t *testing.T) {
+	_, a := startMock(t, mockCfg{
+		apiKey: "sk-1", jwt: "jwt-1", group: "sub",
+		billing: &billingResp{EffectiveRateMultiplier: 1.0, GroupRateMultiplier: 1.0, Timezone: ptrS("UTC")},
+		channels: []availableChannel{{Name: "c1", Platforms: []platformSection{{
+			Platform: "anthropic",
+			Groups: []availableGroupRef{{
+				Name: "sub", SubscriptionType: "subscription", RateMultiplier: 0.25,
+				PeakRateEnabled: true, PeakStart: "09:00", PeakEnd: "12:00", PeakRateMultiplier: 1.5,
+			}},
+			SupportedModels: []supportedModel{oneModel("gpt-4o-mini", 1.5e-7, 6e-7)},
+		}}}},
+	})
+	// 12:00 is the exclusive window end → outside [09:00,12:00).
+	a.SetClock(func() time.Time { return time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC) })
+	caps, _ := a.ProbeCapabilities(context.Background())
+	_, obs, err := a.FetchRatios(context.Background(), caps)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	m, _ := findObsGroup(obs, "gpt-4o-mini", "sub")
+	// 1.5e-7 × 1e6 × 0.25 = 0.0375 (no peak factor).
+	if !eq(m.InputUSDPer1M, 0.0375) {
+		t.Errorf("out-of-window input: want 0.0375 got %v", m.InputUSDPer1M)
+	}
+	if !eq(m.NativeRatio, 0.25) {
+		t.Errorf("native ratio: want 0.25 got %v", m.NativeRatio)
+	}
+}
+
+// TestFetchRatios_ChannelsOnlyNoSkKey: a JWT-only station (no sk-key, no
+// billing). Previously `effective` defaulted to 0 → InputUSDPer1M = base × 1e6 ×
+// 0 = 0 (price lost entirely). With per-group rates from channels/available the
+// model is priced at the group's rate, recovering non-zero USD/1M.
+func TestFetchRatios_ChannelsOnlyNoSkKey(t *testing.T) {
+	_, a := startMock(t, mockCfg{
+		jwt: "jwt-1", group: "discount", // no apiKey → no billing
+		channels: []availableChannel{{Name: "c1", Platforms: []platformSection{{
+			Platform:        "anthropic",
+			Groups:          []availableGroupRef{oneGroup("discount", 0.25)},
+			SupportedModels: []supportedModel{oneModel("gpt-4o-mini", 1.5e-7, 6e-7)},
+		}}}},
+	})
+	caps, _ := a.ProbeCapabilities(context.Background())
+	if caps.HasBilling {
+		t.Error("HasBilling should be false without sk-key")
+	}
+	_, obs, err := a.FetchRatios(context.Background(), caps)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	m, ok := findObsGroup(obs, "gpt-4o-mini", "discount")
+	if !ok {
+		t.Fatal("discount-group row missing")
+	}
+	if !eq(m.InputUSDPer1M, 0.0375) {
+		t.Errorf("input: want 0.0375 got %v (channels-only path must not zero out)", m.InputUSDPer1M)
 	}
 }
 

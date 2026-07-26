@@ -5,9 +5,10 @@ import (
 	"html"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
+
+	"transitmonitor/internal/domain"
 )
 
 // pageSize is the default rows-per-page for paginated tables. paginationCap is
@@ -112,12 +113,12 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 /* group-ratio bar chart */
 .gr-chart{display:flex;flex-direction:column;gap:.45rem;margin-bottom:.6rem}
 .gr-chart.lg{gap:.55rem}
-.gr-chart.lg .gr-row{grid-template-columns:11rem 1fr 4.5rem}
+.gr-chart.lg .gr-row{grid-template-columns:11rem 1fr 6rem}
 .gr-chart.lg .gr-name{font-size:.92rem}
 .gr-chart.lg .gr-track{height:22px;border-radius:11px}
 .gr-chart.lg .gr-bar{border-radius:10px}
 .gr-chart.lg .gr-val{font-size:.95rem}
-.gr-row{display:grid;grid-template-columns:9rem 1fr 3.5rem;align-items:center;gap:.7rem}
+.gr-row{display:grid;grid-template-columns:9rem 1fr 5rem;align-items:center;gap:.7rem}
 .gr-name{font-size:.82rem;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
 .gr-track{height:16px;background:var(--bg-2);border-radius:8px;overflow:hidden;border:1px solid var(--border)}
 .gr-bar{display:block;height:100%;border-radius:7px;transition:width .4s cubic-bezier(.4,0,.2,1)}
@@ -125,6 +126,12 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 .gr-bar.b-ok{background:linear-gradient(90deg,#4f46e5,#818cf8);box-shadow:inset 0 1px 0 rgba(255,255,255,.2)}
 .gr-bar.b-warn{background:linear-gradient(90deg,#d97706,#fbbf24);box-shadow:inset 0 1px 0 rgba(255,255,255,.2)}
 .gr-val{font-size:.85rem;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;font-family:var(--mono)}
+.gr-hidden{margin:.4rem 0 0;border:1px dashed var(--border);border-radius:var(--radius-xs);background:var(--bg-1)}
+.gr-hidden>summary{cursor:pointer;padding:.35rem .6rem;font-size:.78rem;color:var(--muted);list-style:none}
+.gr-hidden>summary::before{content:"▸ ";color:var(--muted)}
+.gr-hidden[open]>summary::before{content:"▾ "}
+.gr-dim{opacity:.5}
+.gr-dim .gr-track{background:transparent}
 
 /* group-ratio trend sparkline grid */
 .spark-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.7rem}
@@ -133,7 +140,7 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 [data-theme="dark"] .spark-cell{background:linear-gradient(180deg,var(--card),rgba(15,23,42,.5))}
 .spark-cell .sc-hdr{display:flex;justify-content:space-between;align-items:baseline;gap:.4rem}
 .spark-cell .sc-name{font-weight:600;font-size:.85rem;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.spark-cell .sc-val{font-size:1.1rem;font-weight:800;font-variant-numeric:tabular-nums;font-family:var(--mono)}
+.spark-cell .sc-val{font-size:1.1rem;font-weight:800;font-variant-numeric:tabular-nums;font-family:var(--mono);text-align:right;min-width:5ch}
 .spark-cell svg{display:block;width:100%;height:36px}
 .spark-wrap{position:relative;line-height:0;height:36px}
 .spark-wrap svg{display:block;width:100%;height:100%}
@@ -155,7 +162,7 @@ details.sec[open]>summary::before{content:"▾";color:var(--primary)}
 details.sec[open]>summary{border-bottom:1px solid var(--border)}
 
 /* group × station matrix cell */
-.gcell{display:inline-block;min-width:3.5rem;padding:.22rem .5rem;border-radius:var(--radius-xs);font-variant-numeric:tabular-nums;font-weight:700;font-size:.85rem;font-family:var(--mono);text-align:center}
+.gcell{display:inline-block;min-width:5rem;padding:.22rem .5rem;border-radius:var(--radius-xs);font-variant-numeric:tabular-nums;font-weight:700;font-size:.85rem;font-family:var(--mono);text-align:center}
 .gcell.p-cheap{background:rgba(5,150,105,.12);color:#059669}
 .gcell.p-mid{background:var(--bg-2);color:var(--ink2)}
 .gcell.p-high{background:rgba(217,119,6,.12);color:#d97706}
@@ -163,6 +170,7 @@ details.sec[open]>summary{border-bottom:1px solid var(--border)}
 [data-theme="dark"] .gcell.p-cheap{background:rgba(52,211,153,.12);color:#34d399}
 [data-theme="dark"] .gcell.p-mid{background:rgba(255,255,255,.04);color:var(--ink2)}
 [data-theme="dark"] .gcell.p-high{background:rgba(251,191,36,.12);color:#fbbf24}
+.gstar{font-size:.7rem;color:var(--primary);margin-left:.15rem}
 
 /* ratio table visual bars + group separators */
 .rat-bar{height:7px;background:var(--bg-2);border-radius:4px;overflow:hidden;margin-bottom:.2rem;min-width:80px}
@@ -199,7 +207,7 @@ tbody tr:nth-child(even){background:rgba(0,0,0,.015)}
 tbody tr:last-child td{border-bottom:0}
 tbody tr{transition:background .1s}
 tbody tr:hover{background:var(--row)}
-.mono{font-family:var(--mono)}.num{text-align:right;white-space:nowrap}
+.mono{font-family:var(--mono)}.num{display:inline-block;text-align:right;white-space:nowrap;min-width:4ch}
 .cell-grp{display:block;font-size:.68rem;line-height:1.1;color:var(--muted);font-weight:400;font-family:var(--mono);margin-top:.05rem}
 
 /* ── pager ── */
@@ -216,7 +224,7 @@ tbody tr:hover{background:var(--row)}
 .badge:hover{transform:scale(1.05)}
 .b-ok{background:var(--ok-soft);color:var(--ok)}.b-warn{background:var(--warn-soft);color:var(--warn)}.b-crit{background:var(--crit-soft);color:var(--crit)}.b-muted{background:#eef2f5;color:var(--muted)}
 [data-theme="dark"] .b-muted{background:#1e293b;color:var(--muted)}
-.pcell{font-family:var(--mono);font-weight:700}
+.pcell{display:inline-block;text-align:right;min-width:4ch;font-family:var(--mono);font-weight:700}
 .p-cheap{color:var(--ok)}.p-high{color:var(--crit)}.p-mid{color:var(--ink)}.p-na{color:#94a3b8;font-weight:400}
 
 /* ── tags ── */
@@ -342,6 +350,14 @@ button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
   .btn-group{flex-direction:column}
   .btn-group .btn{width:100%;justify-content:center}
 }
+.tab-bar{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:1rem}
+.tab-btn{padding:.5rem 1.2rem;text-decoration:none;color:var(--fg-2);font-weight:500;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s}
+.tab-btn:hover{color:var(--fg);background:var(--bg-2);border-radius:6px 6px 0 0}
+.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+#rules-table{width:100%}
+#rules-table input,#rules-table select{font-size:.85rem}
+#rules-table td{padding:.35rem .25rem;vertical-align:middle}
+#rules-table th{padding:.35rem .25rem;text-align:left;font-size:.8rem;color:var(--fg-2)}
 `
 
 type navItem struct{ H, Label, Key string }
@@ -465,7 +481,8 @@ func renderTable(lang string, cols []string, rows [][]string) string {
 
 // renderRatioTable renders the model-ratio table, grouping rows by the first cell
 // (group name) with a full-width separator row carrying the group + its ratio.
-func renderRatioTable(cols []string, rows [][]string) string {
+// hidden maps group names that should be tagged 已隐藏; visible groups get a ★ tag.
+func renderRatioTable(cols []string, rows [][]string, hidden map[string]bool) string {
 	var b strings.Builder
 	b.WriteString(`<div class="tbl-wrap"><table><thead><tr>`)
 	for _, c := range cols {
@@ -478,8 +495,14 @@ func renderRatioTable(cols []string, rows [][]string) string {
 	for _, row := range rows {
 		grp := row[0]
 		if grp != prev {
+			tag := ""
+			if hidden != nil && hidden[grp] {
+				tag = ` <span class="badge-sm b-warn">已隐藏</span>`
+			} else {
+				tag = ` <span class="badge-sm b-cheap">★</span>`
+			}
 			b.WriteString(`<tr class="grp-sep"><td colspan="` + fmt.Sprint(len(cols)) + `">` +
-				`<span class="grp-tag">` + grp + `</span></td></tr>`)
+				`<span class="grp-tag">` + grp + `</span>` + tag + `</td></tr>`)
 			prev = grp
 		}
 		b.WriteString(`<tr>`)
@@ -625,51 +648,73 @@ func severityBadge(lang, sev string) string {
 	return `<span class="badge ` + cls + `" title="` + esc(sev) + `">` + t(lang, key) + `</span>`
 }
 
-// groupRatioChart renders the horizontal bar chart of group ratios, sorted
-// cheapest-first. lg=true renders the larger hero variant (used on the station
-// detail page); false the compact variant (overview cards). Returns "" when
-// the map is empty.
-func groupRatioChart(grs map[string]float64, lg bool) string {
-	if len(grs) == 0 {
+// groupRatioChart renders the horizontal bar chart of group ratios in the given
+// order (caller partitions + orders via domain.PartitionGroups). lg=true renders
+// the larger hero variant (station detail); false the compact variant (overview
+// cards). Color is by ratio value: b-cheap (<0.5), b-warn (>1.0), else b-ok.
+// Returns "" when the slice is empty.
+func groupRatioChart(groups []domain.GroupDisplay, lg bool) string {
+	if len(groups) == 0 {
 		return ""
 	}
-	type gr struct {
-		name string
-		v    float64
-	}
-	grp := make([]gr, 0, len(grs))
 	maxV := 0.0
-	for k, v := range grs {
-		grp = append(grp, gr{k, v})
-		if v > maxV {
-			maxV = v
+	for _, g := range groups {
+		if g.Ratio > maxV {
+			maxV = g.Ratio
 		}
 	}
-	sort.Slice(grp, func(i, j int) bool { return grp[i].v < grp[j].v })
 	cls := ""
 	if lg {
 		cls = " lg"
 	}
 	var b strings.Builder
 	b.WriteString(`<div class="gr-chart` + cls + `">`)
-	for _, g := range grp {
+	for _, g := range groups {
 		pct := 0.0
 		if maxV > 0 {
-			pct = g.v / maxV * 100
+			pct = g.Ratio / maxV * 100
 		}
 		bc := "b-ok"
-		if g.v < 0.5 {
+		if g.Ratio < 0.5 {
 			bc = "b-cheap"
-		} else if g.v > 1.0 {
+		} else if g.Ratio > 1.0 {
 			bc = "b-warn"
 		}
 		b.WriteString(fmt.Sprintf(
 			`<div class="gr-row"><span class="gr-name" title="%s">%s</span>`+
 				`<div class="gr-track"><span class="gr-bar %s" style="width:%.1f%%"></span></div>`+
-				`<span class="gr-val">%.2fx</span></div>`,
-			esc(g.name), esc(g.name), bc, pct, g.v))
+				`<span class="gr-val">%s</span></div>`,
+			esc(g.Name), esc(g.Name), bc, pct, fmtRatio(g.Ratio)+"x"))
 	}
 	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// renderHiddenGroupsExpander renders the "+N hidden" collapsible footer for a
+// station card, listing hidden groups dimmed so their ratios stay reachable
+// (ratios are never truly hidden — honoring the project principle).
+func renderHiddenGroupsExpander(lang string, hidden []domain.GroupDisplay) string {
+	if len(hidden) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<details class="gr-hidden"><summary>`)
+	b.WriteString(fmt.Sprintf(t(lang, "batch.hiddenmore"), len(hidden)))
+	b.WriteString(`</summary><div class="gr-chart">`)
+	for _, g := range hidden {
+		bc := "b-ok"
+		if g.Ratio < 0.5 {
+			bc = "b-cheap"
+		} else if g.Ratio > 1.0 {
+			bc = "b-warn"
+		}
+		b.WriteString(fmt.Sprintf(
+			`<div class="gr-row gr-dim"><span class="gr-name" title="%s">%s</span>`+
+				`<div class="gr-track"><span class="gr-bar %s" style="width:100%%"></span></div>`+
+				`<span class="gr-val">%s</span></div>`,
+			esc(g.Name), esc(g.Name), bc, fmtRatio(g.Ratio)+"x"))
+	}
+	b.WriteString(`</div></details>`)
 	return b.String()
 }
 

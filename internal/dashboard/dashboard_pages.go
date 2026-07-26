@@ -384,8 +384,18 @@ func (s *Server) matrixGroups(sts []domain.Station, modelFilter string) []string
 	groupSet := map[string]bool{}
 	for _, st := range sts {
 		obs, _ := s.store.LatestRatioObservations(context.Background(), st.ID)
+		cfgs, _ := s.store.GetStationGroupConfigs(context.Background(), st.ID)
+		hidden := map[string]bool{}
+		for _, c := range cfgs {
+			if !c.Visible {
+				hidden[c.GroupName] = true
+			}
+		}
 		for _, o := range obs {
 			if modelFilter != "" && o.ModelName != modelFilter {
+				continue
+			}
+			if hidden[o.GroupName] {
 				continue
 			}
 			groupSet[o.GroupName] = true
@@ -416,16 +426,26 @@ func modeBtn(key, mode, lang, labelKey, extraQ string) string {
 // group (most coverage first).
 func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode string) (string, string) {
 	type stGR struct {
-		name string
-		gr   map[string]float64
+		name   string
+		gr     map[string]float64
+		hidden map[string]bool
 	}
 	rows := make([]stGR, len(sts))
 	groupSet := map[string]bool{}
 	for i, st := range sts {
 		gr, _ := s.store.LatestGroupRatios(context.Background(), st.ID)
-		rows[i] = stGR{name: st.Name, gr: gr}
+		cfgs, _ := s.store.GetStationGroupConfigs(context.Background(), st.ID)
+		hidden := map[string]bool{}
+		for _, c := range cfgs {
+			if !c.Visible {
+				hidden[c.GroupName] = true
+			}
+		}
+		rows[i] = stGR{name: st.Name, gr: gr, hidden: hidden}
 		for g := range gr {
-			groupSet[g] = true
+			if !hidden[g] { // OR-of-visible: row exists iff ≥1 station has it visible
+				groupSet[g] = true
+			}
 		}
 	}
 	groups := make([]string, 0, len(groupSet))
@@ -497,7 +517,7 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode st
 		st := stats[g]
 		var tag string
 		if st.cov > 0 {
-			tag = ` <span class="cell-grp">` + fmt.Sprintf(t(lang, "meta.median_cov"), st.median, st.cov) + `</span>`
+			tag = ` <span class="cell-grp">` + fmt.Sprintf(t(lang, "meta.median_cov"), fmtRatio(st.median)+"x", st.cov) + `</span>`
 		}
 		row := []string{`<span class="mono">` + esc(g) + `</span>` + tag}
 		for _, r := range rows {
@@ -505,7 +525,11 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode st
 			if !ok {
 				row = append(row, `<span class="gcell p-na">—</span>`)
 			} else {
-				row = append(row, fmt.Sprintf(`<span class="gcell %s">%.2fx</span>`, groupColorClass(v, lo, hi), v))
+				star := ""
+				if !r.hidden[g] {
+					star = `<span class="gstar">★</span>`
+				}
+				row = append(row, fmt.Sprintf(`<span class="gcell %s">%s</span>%s`, groupColorClass(v, lo, hi), fmtRatio(v)+"x", star))
 			}
 		}
 		dataRows = append(dataRows, row)
@@ -617,10 +641,26 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 func fmtCell(field string, v float64) string {
 	switch field {
 	case "ratio", "eff_in", "eff_out":
-		return fmt.Sprintf("%.4fx", v)
+		return fmtRatio(v) + "x"
 	default:
 		return fmtUSD(v)
 	}
+}
+
+// fmtRatio formats a ratio with natural precision: as many decimals as the
+// source station configured (capped at 6 to suppress float-product noise),
+// trailing zeros stripped. Mirrors changedet's fmt.Sprint storage so the live
+// value matches what the change-history table records. Caller appends "x".
+func fmtRatio(v float64) string {
+	s := fmt.Sprintf("%.6f", v)
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimRight(s, ".")
+	}
+	if s == "" || s == "-0" {
+		s = "0"
+	}
+	return s
 }
 
 // matrixVer is a cache-busting version for matrix field-selector links.
