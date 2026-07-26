@@ -46,7 +46,7 @@ func TestOverviewHidesConfiguredHiddenGroups(t *testing.T) {
 		t.Fatalf("want 200 got %d", r.Code)
 	}
 	body := r.Body.String()
-	if !strings.Contains(body, "vip") || !strings.Contains(body, "0.50x") {
+	if !strings.Contains(body, "vip") || !strings.Contains(body, "0.5x") {
 		t.Errorf("visible group vip should be rendered:\n%s", body)
 	}
 	if !strings.Contains(body, "已隐藏") {
