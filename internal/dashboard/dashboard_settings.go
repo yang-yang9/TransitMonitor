@@ -144,16 +144,16 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 	b.w(`<div id="rules-editor">`)
 
 	typeOptions := []struct{ val, label string }{
-		{"delta_pct", "delta_pct"},
-		{"delta_abs", "delta_abs"},
-		{"model_added", "model_added"},
-		{"model_removed", "model_removed"},
-		{"probe_markup_pct", "probe_markup_pct"},
-		{"endpoint_auth_failed", "endpoint_auth_failed"},
-		{"poll_failure_streak", "poll_failure_streak"},
-		{"group_ratio_delta_pct", "group_ratio_delta_pct"},
-		{"quota_below", "quota_below"},
-		{"quota_drop_pct", "quota_drop_pct"},
+		{"delta_pct", "价格变动百分比"},
+		{"delta_abs", "价格变动绝对值"},
+		{"model_added", "模型新增"},
+		{"model_removed", "模型下架"},
+		{"probe_markup_pct", "探测加价百分比"},
+		{"endpoint_auth_failed", "鉴权失败"},
+		{"poll_failure_streak", "连续轮询失败"},
+		{"group_ratio_delta_pct", "分组倍率变动百分比"},
+		{"quota_below", "余额低于阈值"},
+		{"quota_drop_pct", "余额下降百分比"},
 	}
 
 	dirOptions := []struct{ val, label string }{
