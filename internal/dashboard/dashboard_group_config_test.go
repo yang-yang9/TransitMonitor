@@ -141,3 +141,42 @@ func TestMatrixHidesGroupsHiddenEverywhere(t *testing.T) {
 		t.Errorf("visible station cell should carry ★ marker:\n%s", body)
 	}
 }
+
+func TestStationDetailOrdersByConfigAndTagsHidden(t *testing.T) {
+	srv, st, cleanup := newDash(t, "")
+	defer cleanup()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	_ = st.UpsertStation(ctx, domain.Station{ID: "s1", Name: "S1", Kind: domain.KindNewAPI, BaseURL: "https://a.example", Enabled: true}, nil)
+	_ = st.InsertSnapshot(ctx, domain.RawSnapshot{
+		StationID: "s1", ObservedAt: now,
+		GroupRatios: map[string]float64{"vip": 0.5, "internal": 2.0},
+	})
+	_ = st.InsertRatioObservations(ctx, []domain.RatioObservation{
+		{StationID: "s1", GroupName: "internal", ModelName: "gpt-4o", InputUSDPer1M: 2.5, ObservedAt: now},
+		{StationID: "s1", GroupName: "vip", ModelName: "gpt-4o", InputUSDPer1M: 1.0, ObservedAt: now},
+	})
+	saveGroupCfg(t, srv, "s1", []domain.StationGroupConfig{
+		{StationID: "s1", GroupName: "vip", Visible: true, SortOrder: 0},
+		{StationID: "s1", GroupName: "internal", Visible: false, SortOrder: 0},
+	})
+
+	r := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(r, localReq(http.MethodGet, "/stations/s1"))
+	if r.Code != 200 {
+		t.Fatalf("want 200 got %d", r.Code)
+	}
+	body := r.Body.String()
+	// visible group (vip) must appear before hidden (internal) in the ratio table
+	vi := strings.Index(body, ">vip<")
+	ii := strings.Index(body, ">internal<")
+	if vi < 0 || ii < 0 {
+		t.Fatalf("both group separators must render:\n%s", body)
+	}
+	if vi > ii {
+		t.Errorf("visible group vip should appear before hidden internal: vi=%d ii=%d", vi, ii)
+	}
+	if !strings.Contains(body, "已隐藏") {
+		t.Errorf("hidden group should carry 已隐藏 tag:\n%s", body)
+	}
+}

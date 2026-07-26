@@ -481,7 +481,8 @@ func renderTable(lang string, cols []string, rows [][]string) string {
 
 // renderRatioTable renders the model-ratio table, grouping rows by the first cell
 // (group name) with a full-width separator row carrying the group + its ratio.
-func renderRatioTable(cols []string, rows [][]string) string {
+// hidden maps group names that should be tagged 已隐藏; visible groups get a ★ tag.
+func renderRatioTable(cols []string, rows [][]string, hidden map[string]bool) string {
 	var b strings.Builder
 	b.WriteString(`<div class="tbl-wrap"><table><thead><tr>`)
 	for _, c := range cols {
@@ -494,8 +495,14 @@ func renderRatioTable(cols []string, rows [][]string) string {
 	for _, row := range rows {
 		grp := row[0]
 		if grp != prev {
+			tag := ""
+			if hidden != nil && hidden[grp] {
+				tag = ` <span class="badge-sm b-warn">已隐藏</span>`
+			} else {
+				tag = ` <span class="badge-sm b-cheap">★</span>`
+			}
 			b.WriteString(`<tr class="grp-sep"><td colspan="` + fmt.Sprint(len(cols)) + `">` +
-				`<span class="grp-tag">` + grp + `</span></td></tr>`)
+				`<span class="grp-tag">` + grp + `</span>` + tag + `</td></tr>`)
 			prev = grp
 		}
 		b.WriteString(`<tr>`)

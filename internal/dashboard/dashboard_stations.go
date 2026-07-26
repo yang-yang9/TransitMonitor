@@ -161,6 +161,12 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// group ratios (loaded early so the ratios table can show per-row group_ratio)
 	groupRatios, _ := s.store.LatestGroupRatios(ctx, id)
+	stGroupCfgs, _ := s.store.GetStationGroupConfigs(ctx, id)
+	groupDisplay := domain.PartitionGroups(groupRatios, stGroupCfgs)
+	displayByName := map[string]domain.GroupDisplay{}
+	for _, d := range groupDisplay {
+		displayByName[d.Name] = d
+	}
 	// ratios — sorted by group then cheapest effective-input first; with a
 	// visual bar on the effective ratio so magnitude is readable at a glance.
 	obs, _ := s.store.LatestRatioObservations(ctx, id)
@@ -187,7 +193,14 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, rob{o, gr, cr, ei, eo})
 	}
-	sort.Slice(rows, func(i, j int) bool {
+	sort.SliceStable(rows, func(i, j int) bool {
+		gi, gj := displayByName[rows[i].o.GroupName], displayByName[rows[j].o.GroupName]
+		if gi.Visible != gj.Visible {
+			return gi.Visible
+		}
+		if gi.Order != gj.Order {
+			return gi.Order < gj.Order
+		}
 		if rows[i].o.GroupName != rows[j].o.GroupName {
 			return rows[i].o.GroupName < rows[j].o.GroupName
 		}
@@ -239,8 +252,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 		uptime = fmt.Sprintf("%d errors", pollErrs)
 	}
 	// HERO: large group-ratio bar chart.
-	stGroupCfgs, _ := s.store.GetStationGroupConfigs(ctx, id)
-	heroChart := groupRatioChart(domain.PartitionGroups(groupRatios, stGroupCfgs), true)
+	heroChart := groupRatioChart(groupDisplay, true)
 	// Balance section: latest reading + trend sparkline (only if the station
 	// exposes a balance source).
 	balanceHTML := ""
@@ -287,7 +299,16 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 				gSer[g].vals = append(gSer[g].vals, v)
 			}
 		}
-		sort.Strings(order)
+		sort.SliceStable(order, func(i, j int) bool {
+			gi, gj := displayByName[order[i]], displayByName[order[j]]
+			if gi.Visible != gj.Visible {
+				return gi.Visible
+			}
+			if gi.Order != gj.Order {
+				return gi.Order < gj.Order
+			}
+			return order[i] < order[j]
+		})
 		trendHTML = `<h2>` + t(lang, "section.grouptrend") + `</h2><div class="spark-grid">`
 		for _, g := range order {
 			vals := gSer[g].vals
@@ -359,7 +380,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			trendHTML +
 			`<h2>` + t(lang, "section.groupchanges") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.oldratio"), t(lang, "col.newratio"), t(lang, "col.deltapct"), t(lang, "col.severity")}, groupPage) + gpg +
 			`<details class="sec"><summary>` + t(lang, "expand.models") + ` (` + fmt.Sprintf("%d", len(ratioRows)) + `)</summary>` +
-			renderRatioTable([]string{t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.modelratio"), t(lang, "col.completionratio"), t(lang, "col.groupratio"), t(lang, "col.effratio"), t(lang, "col.status")}, ratioRows) + `</details>` +
+			renderRatioTable([]string{t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.modelratio"), t(lang, "col.completionratio"), t(lang, "col.groupratio"), t(lang, "col.effratio"), t(lang, "col.status")}, ratioRows, hiddenGroupsMap(groupDisplay)) + `</details>` +
 			`<details class="sec"><summary>` + t(lang, "expand.modelchanges") + ` (` + fmt.Sprintf("%d", len(modelChangeRows)) + `)</summary>` +
 			renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, modelPage) + mpg + `</details>` +
 			`<details class="sec"><summary>` + t(lang, "expand.probes") + ` (` + fmt.Sprintf("%d", len(probeRows)) + `)</summary>` +
@@ -846,6 +867,18 @@ function tmGcSave(id){var rows=document.querySelectorAll('#tm-gc-body tr');
 </script>`)
 	b.WriteString(`</details>`)
 	return b.String()
+}
+
+// hiddenGroupsMap returns a set of group names that are hidden (not visible)
+// for use as renderRatioTable's hidden argument.
+func hiddenGroupsMap(displays []domain.GroupDisplay) map[string]bool {
+	m := map[string]bool{}
+	for _, d := range displays {
+		if !d.Visible {
+			m[d.Name] = true
+		}
+	}
+	return m
 }
 
 // groupConfigInput is one row of the POST /stations/{id}/groups payload.
