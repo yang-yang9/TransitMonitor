@@ -11,6 +11,7 @@ transitmonitor
 docs/
 openspec/
 scripts/
+!scripts/entrypoint.sh
 testdata/
 *.md
 !README.md

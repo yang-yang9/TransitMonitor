@@ -611,7 +611,7 @@ func sparklineSVG(vals []float64, w, h int, tipFmt string) string {
 	b.WriteString(`</svg>`)
 	fmt.Fprintf(&b, `<div class="spark-dots" style="grid-template-columns:repeat(%d,1fr)">`, len(points))
 	for _, p := range points {
-		fmt.Fprintf(&b, `<span class="spark-dot" data-tip="` + tipFmt + `"></span>`, p.v)
+		fmt.Fprintf(&b, `<span class="spark-dot" data-tip="`+tipFmt+`"></span>`, p.v)
 	}
 	b.WriteString(`</div></div>`)
 	return b.String()
