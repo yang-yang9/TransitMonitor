@@ -135,14 +135,14 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 .spark-cell .sc-name{font-weight:600;font-size:.85rem;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .spark-cell .sc-val{font-size:1.1rem;font-weight:800;font-variant-numeric:tabular-nums;font-family:var(--mono)}
 .spark-cell svg{display:block;width:100%;height:36px}
-.spark-wrap{position:relative;line-height:0;height:36px;margin-top:1.6rem}
+.spark-wrap{position:relative;line-height:0;height:36px}
 .spark-wrap svg{display:block;width:100%;height:100%}
 .spark-dots{position:absolute;top:0;left:0;right:0;bottom:0;display:grid}
-.spark-dot{cursor:crosshair;position:relative;min-width:0}
-.spark-dot::before{content:attr(data-tip);position:absolute;top:-4px;left:50%;transform:translate(-50%,-100%);background:#1e293b;color:#fff;font-size:.72rem;font-family:var(--mono);padding:.25rem .5rem;border-radius:var(--radius-xs);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .1s;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.25)}
-.spark-dot:hover::before{opacity:1}
-.spark-dot:hover{background:rgba(20,184,166,.2)}
-[data-theme="dark"] .spark-dot::before{background:#334155}
+.spark-dot{cursor:crosshair;min-width:0}
+.spark-dot:hover{background:rgba(20,184,166,.15)}
+#tm-tip{position:fixed;background:#1e293b;color:#fff;font-size:.75rem;font-family:var(--mono);padding:.3rem .6rem;border-radius:var(--radius-xs);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .1s;z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,.35);transform:translate(-50%,-100%);margin-top:-8px}
+#tm-tip.show{opacity:1}
+[data-theme="dark"] #tm-tip{background:#334155;box-shadow:0 4px 14px rgba(0,0,0,.6)}
 .spark-cell .sc-delta{font-size:.72rem;font-weight:700}
 
 /* collapsible details sections */
@@ -242,9 +242,17 @@ tr.drag-over{box-shadow:0 -2px 0 var(--primary) inset}
 .matrix-bar{gap:.5rem .7rem}
 .bar-seg{display:inline-flex;flex-wrap:wrap;align-items:center;gap:.35rem;font-size:.85rem;font-weight:500;color:var(--ink2)}
 .bar-sep{width:1px;align-self:stretch;min-height:1.4rem;background:var(--border);margin:0 .3rem}
-.st-sel{display:inline-flex;flex-direction:row;align-items:center;gap:0;flex:0 0 auto}
-.st-sel select{width:auto;padding:.32rem 1.6rem .32rem .55rem;font-size:.82rem;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--card);color:var(--ink)}
-.st-sel select:focus{border-color:var(--primary);box-shadow:var(--input-ring)}
+.st-sel{position:relative;display:inline-flex}
+.st-btn{display:inline-flex;align-items:center;gap:.3rem;padding:.3rem .6rem;font-size:.82rem;font-weight:500;color:var(--ink);background:var(--card);border:1.5px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;user-select:none;white-space:nowrap}
+.st-btn:hover{border-color:var(--primary)}
+.st-sel.open .st-btn{border-color:var(--primary);box-shadow:var(--input-ring)}
+.st-sel.open .csel-arrow{transform:rotate(180deg)}
+.st-drop{display:none;position:absolute;top:calc(100% + 4px);left:0;min-width:100%;background:var(--card);border:1.5px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);z-index:20;overflow:hidden}
+.st-sel.open .st-drop{display:block}
+.st-opt{display:block;padding:.45rem .7rem;font-size:.82rem;color:var(--ink);white-space:nowrap;text-decoration:none}
+.st-opt:hover{background:var(--primary-50)}
+.st-opt.cur{background:var(--primary-50);color:var(--primary-700);font-weight:600}
+.st-opt.cur::before{content:"\2713 ";color:var(--primary);font-weight:700}
 .btn-group{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
 
 /* ── forms ── */
@@ -391,17 +399,21 @@ func pageShell(lang, title, active, body string, showLogout bool) string {
 		`Array.from(sel.options).forEach(function(o){var d=document.createElement('div');d.className='csel-opt'+(o.selected?' cur':'');d.textContent=o.text;d.dataset.val=o.value;` +
 		`d.onclick=function(){sel.value=this.dataset.val;sel.dispatchEvent(new Event('change'));btn.childNodes[0].textContent=this.textContent;drop.querySelectorAll('.csel-opt').forEach(function(x){x.classList.remove('cur')});this.classList.add('cur');w.classList.remove('open');};drop.appendChild(d);});` +
 		`w.appendChild(drop);btn.onclick=function(e){e.stopPropagation();document.querySelectorAll('.csel.open').forEach(function(c){if(c!==w)c.classList.remove('open')});w.classList.toggle('open');};` +
-		`});document.addEventListener('click',function(){document.querySelectorAll('.csel.open').forEach(function(c){c.classList.remove('open')})});` +
+		`});document.addEventListener('click',function(e){document.querySelectorAll('.csel.open').forEach(function(c){c.classList.remove('open')});document.querySelectorAll('.st-sel.open').forEach(function(c){if(!c.contains(e.target))c.classList.remove('open')})});` +
 		// custom modal confirm
 		`window.tmConfirm=function(msg,cb){var o=document.getElementById('tm-modal');var t=document.getElementById('tm-modal-msg');t.textContent=msg;o.classList.add('show');` +
 		`document.getElementById('tm-modal-ok').onclick=function(){o.classList.remove('show');cb();};document.getElementById('tm-modal-cancel').onclick=function(){o.classList.remove('show');};};` +
 		`window.tmLogout=function(){fetch('/api/logout',{method:'POST'}).then(function(){location.href='/login';}).catch(function(){location.href='/login';});};` +
 		`window.tmToggleBatch=function(id,el){var rows=document.querySelectorAll('.batch-extra-'+id);var show=rows[0]&&rows[0].style.display==='none';rows.forEach(function(r){r.style.display=show?'':'none';});el.textContent=show?el.dataset.less:el.dataset.more;};` +
+		// global sparkline tooltip via fixed-position div
+		`var tip=document.getElementById('tm-tip');document.addEventListener('mouseover',function(e){var d=e.target.closest('.spark-dot');if(d&&d.dataset.tip){tip.textContent=d.dataset.tip;var r=d.getBoundingClientRect();tip.style.left=(r.left+r.width/2)+'px';tip.style.top=r.top+'px';tip.classList.add('show');}});` +
+		`document.addEventListener('mouseout',function(e){if(e.target.closest('.spark-dot'))tip.classList.remove('show');});` +
 		`})();</script>`
 	modalHTML := `<div class="modal-overlay" id="tm-modal"><div class="modal-box">` +
 		`<h3>` + t(lang, "modal.title") + `</h3><p id="tm-modal-msg"></p>` +
 		`<div class="modal-actions"><button class="btn btn-outline" id="tm-modal-cancel">` + t(lang, "modal.cancel") + `</button>` +
-		`<button class="btn btn-danger" id="tm-modal-ok">` + t(lang, "modal.confirm") + `</button></div></div></div>`
+		`<button class="btn btn-danger" id="tm-modal-ok">` + t(lang, "modal.confirm") + `</button></div></div></div>` +
+		`<div id="tm-tip"></div>`
 	favicon := `<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314b8a6'/%3E%3Ctext x='16' y='23' font-size='16' font-weight='bold' fill='white' text-anchor='middle' font-family='sans-serif'%3ETM%3C/text%3E%3C/svg%3E">`
 	return fmt.Sprintf(`<!doctype html><html lang="%s"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">%s<title>%s · TransitMonitor</title><style>%s</style></head>`+
 		`<body><header class="top"><div class="top-row">`+
