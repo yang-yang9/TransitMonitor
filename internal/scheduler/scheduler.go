@@ -310,6 +310,7 @@ func (s *Scheduler) AddStation(st domain.Station) error {
 		}
 	}
 	if !replaced {
+		st.SortOrder = len(s.stationList)
 		s.stationList = append(s.stationList, st)
 	}
 	s.Adapters[st.ID] = a
@@ -341,6 +342,38 @@ func (s *Scheduler) RemoveStation(id string) error {
 	s.mu.Unlock()
 	if s.EncKey != nil && s.Store != nil {
 		_ = s.Store.DeleteStation(s.runCtx, id)
+	}
+	return nil
+}
+
+// ReorderStations reorders the in-memory station list + persists sort_order to DB.
+func (s *Scheduler) ReorderStations(ids []string) error {
+	if s.runCtx == nil {
+		return fmt.Errorf("调度器未运行")
+	}
+	s.mu.Lock()
+	idx := make(map[string]int, len(s.stationList))
+	for i, st := range s.stationList {
+		idx[st.ID] = i
+	}
+	reordered := make([]domain.Station, 0, len(s.stationList))
+	seen := make(map[string]bool, len(ids))
+	for order, id := range ids {
+		if i, ok := idx[id]; ok {
+			s.stationList[i].SortOrder = order
+			reordered = append(reordered, s.stationList[i])
+			seen[id] = true
+		}
+	}
+	for _, st := range s.stationList {
+		if !seen[st.ID] {
+			reordered = append(reordered, st)
+		}
+	}
+	s.stationList = reordered
+	s.mu.Unlock()
+	if s.Store != nil {
+		_ = s.Store.ReorderStations(s.runCtx, ids)
 	}
 	return nil
 }

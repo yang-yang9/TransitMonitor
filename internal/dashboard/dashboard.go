@@ -100,6 +100,7 @@ func New(stations []domain.Station, st *store.Store, token, password string) *Se
 	r.Post("/api/stations", s.stationsCreate)
 	r.Put("/api/stations/{id}", s.stationsUpsert)
 	r.Delete("/api/stations/{id}", s.stationsDelete)
+	r.Put("/api/stations/order", s.stationsReorder)
 	r.Post("/api/stations/{id}/poll", s.stationsPoll)
 	r.Post("/api/stations/{id}/login", s.stationsLogin)
 	r.Post("/api/settings", s.settingsSave)

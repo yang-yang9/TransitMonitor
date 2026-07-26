@@ -353,11 +353,11 @@ func (s *Store) UpsertStation(ctx context.Context, st domain.Station, encKey []b
 		enabled = 1
 	}
 	pollSec := int64(time.Duration(st.PollInterval) / time.Second)
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO stations (id,name,kind,base_url,config_yaml,poll_interval_seconds,tags,enabled)
-		VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind,
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO stations (id,name,kind,base_url,config_yaml,poll_interval_seconds,tags,enabled,sort_order)
+		VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind,
 		base_url=excluded.base_url, config_yaml=excluded.config_yaml, poll_interval_seconds=excluded.poll_interval_seconds,
-		tags=excluded.tags, enabled=excluded.enabled, updated_at=CURRENT_TIMESTAMP`,
-		st.ID, st.Name, string(st.Kind), st.BaseURL, string(blob), pollSec, tags, enabled); err != nil {
+		tags=excluded.tags, enabled=excluded.enabled, sort_order=excluded.sort_order, updated_at=CURRENT_TIMESTAMP`,
+		st.ID, st.Name, string(st.Kind), st.BaseURL, string(blob), pollSec, tags, enabled, st.SortOrder); err != nil {
 		return err
 	}
 	if encKey == nil {
@@ -394,7 +394,7 @@ type StationLoadFailure struct {
 // it, or the station silently polls with no credentials and the operator only
 // sees a misleading downstream "no api_key" error.
 func (s *Store) ListStationsDB(ctx context.Context, encKey []byte) ([]domain.Station, []StationLoadFailure, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, config_yaml FROM stations`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, config_yaml FROM stations ORDER BY sort_order, id`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -436,6 +436,22 @@ func (s *Store) ListStationsDB(ctx context.Context, encKey []byte) ([]domain.Sta
 func (s *Store) DeleteStation(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM stations WHERE id=?", id)
 	return err
+}
+
+// ReorderStations sets sort_order for each station according to the position
+// in orderedIDs. IDs not in the slice keep sort_order 0.
+func (s *Store) ReorderStations(ctx context.Context, orderedIDs []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i, id := range orderedIDs {
+		if _, err := tx.ExecContext(ctx, "UPDATE stations SET sort_order=? WHERE id=?", i, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // InsertSnapshot stores a raw snapshot payload.

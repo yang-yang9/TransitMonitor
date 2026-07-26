@@ -93,6 +93,7 @@ type Station struct {
 	Probe        ProbeConfig `yaml:"probe" json:"probe"`
 	Tags         []string    `yaml:"tags" json:"tags"`
 	Enabled      bool        `yaml:"enabled" json:"enabled"`
+	SortOrder    int         `yaml:"sort_order" json:"sort_order"`
 
 	// DecryptFailed marks a station whose encrypted credentials could not be
 	// decrypted at load time (TRANSMONITOR_ENCRYPTION_KEY mismatch). Transient:
