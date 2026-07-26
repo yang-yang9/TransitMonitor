@@ -454,6 +454,76 @@ func (s *Store) ReorderStations(ctx context.Context, orderedIDs []string) error 
 	return tx.Commit()
 }
 
+// GetStationGroupConfigs returns all per-group display config rows for a station.
+// Groups with no row are absent — callers treat absence as visible=true,sort_order=0
+// (see domain.PartitionGroups).
+func (s *Store) GetStationGroupConfigs(ctx context.Context, stationID string) ([]domain.StationGroupConfig, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT station_id, group_name, visible, sort_order FROM station_group_config WHERE station_id=? ORDER BY sort_order, group_name`,
+		stationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.StationGroupConfig
+	for rows.Next() {
+		var c domain.StationGroupConfig
+		var vis int
+		if err := rows.Scan(&c.StationID, &c.GroupName, &vis, &c.SortOrder); err != nil {
+			return nil, err
+		}
+		c.Visible = vis != 0
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// UpsertStationGroupConfig inserts or updates a single group's display config.
+func (s *Store) UpsertStationGroupConfig(ctx context.Context, cfg domain.StationGroupConfig) error {
+	vis := 0
+	if cfg.Visible {
+		vis = 1
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO station_group_config (station_id, group_name, visible, sort_order) VALUES (?,?,?,?)
+		 ON CONFLICT(station_id, group_name) DO UPDATE SET visible=excluded.visible, sort_order=excluded.sort_order`,
+		cfg.StationID, cfg.GroupName, vis, cfg.SortOrder)
+	return err
+}
+
+// SaveStationGroupConfigs replaces the entire per-station config set in one
+// transaction (delete-then-insert). Last-write-wins; an empty cfgs slice clears
+// all rows for the station.
+func (s *Store) SaveStationGroupConfigs(ctx context.Context, stationID string, cfgs []domain.StationGroupConfig) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx, `DELETE FROM station_group_config WHERE station_id=?`, stationID); err != nil {
+		return err
+	}
+	for _, c := range cfgs {
+		vis := 0
+		if c.Visible {
+			vis = 1
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO station_group_config (station_id, group_name, visible, sort_order) VALUES (?,?,?,?)`,
+			c.StationID, c.GroupName, vis, c.SortOrder); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// DeleteStationGroupConfig removes one group's config row (optional cleanup;
+// orphaned rows are harmless since rendering only reads current-poll groups).
+func (s *Store) DeleteStationGroupConfig(ctx context.Context, stationID, groupName string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM station_group_config WHERE station_id=? AND group_name=?`, stationID, groupName)
+	return err
+}
+
 // InsertSnapshot stores a raw snapshot payload.
 func (s *Store) InsertSnapshot(ctx context.Context, snap domain.RawSnapshot) error {
 	capsJSON := ""
@@ -845,6 +915,28 @@ func (s *Store) GetNotifierConfig(ctx context.Context, id string, key []byte) (s
 		return "", err
 	}
 	return string(pt), nil
+}
+
+// SetAppSetting upserts a plain-text key-value pair in app_settings.
+func (s *Store) SetAppSetting(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO app_settings (key, value, updated_at) VALUES (?,?,CURRENT_TIMESTAMP)
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP`, key, value)
+	return err
+}
+
+// GetAppSetting reads a plain-text setting. Returns ("", false, nil) when the
+// key does not exist.
+func (s *Store) GetAppSetting(ctx context.Context, key string) (string, bool, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, "SELECT value FROM app_settings WHERE key=?", key).Scan(&v)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return v, true, nil
 }
 
 // AlertEventRow is a persisted alert event (for the /alerts page).
