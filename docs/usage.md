@@ -165,7 +165,7 @@ SQLite 单文件 `transitmonitor.db`（+ `-wal`/`-shm`）。停服后复制即�
 - **仅 Release 构建可自更新**：`make build` 产物 version=`0.1.0-dev`，会被当作比任何 tag 都旧（`dev` 在版本比较里等于 0.0.0），所以仍能提示有新版本；但自更新建议跑 Release 资产。
 - **Docker 用户需先拉一次含 wrapper 的镜像（v0.0.2+）**。v0.0.1 镜像没有 wrapper，面板内更新后容器重建会回退到旧镜像二进制——`/system` 页会检测 wrapper 是否就位，未就位时禁用「立即更新」并提示重新拉镜像。
 - 下载校验：仅允许 `github.com` / `*.githubusercontent.com` 的 HTTPS（SSRF 守卫），`io.LimitReader` 500MB 上限。
-- 可选环境变量：`TRANSMONITOR_UPDATE_GITHUB_TOKEN`（GitHub Bearer，提高 API 速率限制，仅发给 `api.github.com`）；`HTTP_PROXY`/`HTTPS_PROXY`（Go 默认支持，内网访问 GitHub 走代理出口）。
+- 可选环境变量：`TRANSMONITOR_UPDATE_GITHUB_TOKEN`（GitHub Bearer，提高 API 速率限制，仅发给 `api.github.com`）；`HTTP_PROXY`/`HTTPS_PROXY`（Go 默认支持，内网访问 GitHub 走代理出口）。**注意：仓库为 private 时必须设此 token（需 `repo` scope），否则 GitHub Releases API 返回 404。**
 - 裸二进制模式下回退备份落在二进制同目录的 `.transitmonitor-backups/`；Docker 模式落在 `/data/.updates/backup/`。
 
 API：`GET /api/system/version`、`GET /api/system/check-updates[?force=true]`、`GET /api/system/rollback-versions`、`POST /api/system/upgrade`、`POST /api/system/rollback`（body 可选 `{"version":"x.y.z"}`）、`POST /api/system/restart`。均受 dashboard 鉴权保护（token / localhost / `TRANSMONITOR_DASHBOARD_PUBLIC`）。

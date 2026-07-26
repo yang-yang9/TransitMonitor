@@ -7,7 +7,7 @@ services:
   transitmonitor:
     # Prebuilt multi-arch image (amd64+arm64) published to ghcr.io on every `v*` tag.
     # To build from source instead: comment the line below and use `build: .`.
-    image: ghcr.io/yang-yang9/transitmonitor:v0.0.1
+    image: ghcr.io/yang-yang9/transitmonitor:v0.0.2
     container_name: transitmonitor
     restart: unless-stopped
     ports:
@@ -17,6 +17,8 @@ services:
       TRANSMONITOR_DASHBOARD_TOKEN: ${TRANSMONITOR_DASHBOARD_TOKEN:-}
       TRANSMONITOR_ENCRYPTION_KEY: ${TRANSMONITOR_ENCRYPTION_KEY:-}
       TRANSMONITOR_LOG_LEVEL: ${TRANSMONITOR_LOG_LEVEL:-info}
+      # Required for in-panel update if the repo is private (needs `repo` scope).
+      TRANSMONITOR_UPDATE_GITHUB_TOKEN: ${TRANSMONITOR_UPDATE_GITHUB_TOKEN:-}
     volumes:
       - ./config.yaml:/config/config.yaml:ro   # your station config (read-only)
       - tm-data:/data                          # sqlite db persists across restarts
