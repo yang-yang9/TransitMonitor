@@ -371,7 +371,7 @@ func pageShell(lang, title, active, body string, showLogout bool) string {
 		`window.tmToggleTheme=function(){var n=(d.dataset.theme==='dark')?'light':'dark';d.dataset.theme=n;localStorage.setItem('tm-theme',n);syncTheme();};` +
 		`window.tmSetLang=function(l){document.cookie='tm-lang='+l+';path=/;max-age=2592000';location.reload();};` +
 		`var ar=localStorage.getItem('tm-autorefresh');if(ar===null)ar='1';function syncAuto(){var b=document.getElementById('tm-autorefresh'),l=document.getElementById('tm-ar-label');if(b){b.classList.toggle('on',ar==='1');if(l)l.textContent=ar==='1'?'60s':'OFF';}}syncAuto();` +
-		`if(ar==='1'){setTimeout(function(){location.reload();},60000);}` +
+		`if(ar==='1'){var tmDirty=false;document.addEventListener('input',function(){tmDirty=true;},true);document.addEventListener('change',function(){tmDirty=true;},true);/* skip auto-reload once the user has edited a field, so unsaved form input isn't wiped */setTimeout(function(){if(!tmDirty){location.reload();}},60000);}` +
 		`window.tmToggleAuto=function(){var n=(localStorage.getItem('tm-autorefresh')||'1')==='1'?'0':'1';localStorage.setItem('tm-autorefresh',n);location.reload();};` +
 		`window.tmHam=function(){document.getElementById('tm-nav').classList.toggle('open');};` +
 		`document.addEventListener('click',function(e){var n=document.getElementById('tm-nav');if(n&&n.classList.contains('open')&&!e.target.closest('nav')&&!e.target.closest('.ham'))n.classList.remove('open');});` +
