@@ -7,6 +7,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -299,4 +300,64 @@ type AuditEntry struct {
 	Action string // e.g. "probe.run", "startup"
 	Target string // e.g. station id / model
 	Detail string // redacted of secrets by callers
+}
+
+// StationGroupConfig is a per-station, per-group display preference persisted in
+// station_group_config. A group with no row defaults to visible=true, sort_order=0
+// (see PartitionGroups) so newly-polled groups never silently disappear.
+type StationGroupConfig struct {
+	StationID string
+	GroupName string
+	Visible   bool
+	SortOrder int
+}
+
+// GroupDisplay is a group merged with its display config, ordered for rendering.
+type GroupDisplay struct {
+	Name    string
+	Ratio   float64
+	Visible bool
+	Order   int
+}
+
+// PartitionGroups merges a station's current group ratios with its display config
+// into an ordered view: visible first (by sort_order asc, then name asc), then
+// hidden (same tie-break). Groups with no config row default to visible=true,
+// sort_order=0 — so new groups surface by default rather than silently hiding.
+func PartitionGroups(ratios map[string]float64, cfgs []StationGroupConfig) []GroupDisplay {
+	byName := make(map[string]StationGroupConfig, len(cfgs))
+	for _, c := range cfgs {
+		byName[c.GroupName] = c
+	}
+	out := make([]GroupDisplay, 0, len(ratios))
+	for name, r := range ratios {
+		c, ok := byName[name]
+		if !ok {
+			c = StationGroupConfig{Visible: true, SortOrder: 0}
+		}
+		out = append(out, GroupDisplay{Name: name, Ratio: r, Visible: c.Visible, Order: c.SortOrder})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Visible != out[j].Visible {
+			return out[i].Visible
+		}
+		if out[i].Order != out[j].Order {
+			return out[i].Order < out[j].Order
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// SplitVisible partitions an ordered GroupDisplay slice into (visible, hidden),
+// preserving order within each half.
+func SplitVisible(groups []GroupDisplay) (visible, hidden []GroupDisplay) {
+	for _, g := range groups {
+		if g.Visible {
+			visible = append(visible, g)
+		} else {
+			hidden = append(hidden, g)
+		}
+	}
+	return visible, hidden
 }
