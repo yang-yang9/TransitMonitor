@@ -170,6 +170,7 @@ details.sec[open]>summary{border-bottom:1px solid var(--border)}
 [data-theme="dark"] .gcell.p-cheap{background:rgba(52,211,153,.12);color:#34d399}
 [data-theme="dark"] .gcell.p-mid{background:rgba(255,255,255,.04);color:var(--ink2)}
 [data-theme="dark"] .gcell.p-high{background:rgba(251,191,36,.12);color:#fbbf24}
+.gstar{font-size:.7rem;color:var(--primary);margin-left:.15rem}
 
 /* ratio table visual bars + group separators */
 .rat-bar{height:7px;background:var(--bg-2);border-radius:4px;overflow:hidden;margin-bottom:.2rem;min-width:80px}

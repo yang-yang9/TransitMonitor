@@ -110,3 +110,34 @@ func TestStationGroupSettingsSaveAndRender(t *testing.T) {
 		t.Errorf("per-group checkbox row missing:\n%s", html)
 	}
 }
+
+func TestMatrixHidesGroupsHiddenEverywhere(t *testing.T) {
+	srv, st, cleanup := newDash(t, "")
+	defer cleanup()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	// both stations carry vip + internal
+	_ = st.UpsertStation(ctx, domain.Station{ID: "s1", Name: "S1", Kind: domain.KindNewAPI, BaseURL: "https://a.example", Enabled: true}, nil)
+	_ = st.UpsertStation(ctx, domain.Station{ID: "s2", Name: "S2", Kind: domain.KindSub2API, BaseURL: "https://b.example", Enabled: true}, nil)
+	_ = st.InsertSnapshot(ctx, domain.RawSnapshot{StationID: "s1", ObservedAt: now, GroupRatios: map[string]float64{"vip": 0.5, "internal": 2.0}})
+	_ = st.InsertSnapshot(ctx, domain.RawSnapshot{StationID: "s2", ObservedAt: now, GroupRatios: map[string]float64{"vip": 0.6, "internal": 2.1}})
+	// vip visible on s1 (hidden on s2); internal hidden on both
+	saveGroupCfg(t, srv, "s1", []domain.StationGroupConfig{{StationID: "s1", GroupName: "vip", Visible: true, SortOrder: 0}, {StationID: "s1", GroupName: "internal", Visible: false, SortOrder: 0}})
+	saveGroupCfg(t, srv, "s2", []domain.StationGroupConfig{{StationID: "s2", GroupName: "vip", Visible: false, SortOrder: 0}, {StationID: "s2", GroupName: "internal", Visible: false, SortOrder: 0}})
+
+	r := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(r, localReq(http.MethodGet, "/matrix"))
+	if r.Code != 200 {
+		t.Fatalf("want 200 got %d", r.Code)
+	}
+	body := r.Body.String()
+	if !strings.Contains(body, "vip") {
+		t.Errorf("vip (visible on s1) should be a matrix row:\n%s", body)
+	}
+	if strings.Contains(body, "internal") {
+		t.Errorf("internal (hidden on all stations) should NOT be a matrix row:\n%s", body)
+	}
+	if !strings.Contains(body, "★") {
+		t.Errorf("visible station cell should carry ★ marker:\n%s", body)
+	}
+}
