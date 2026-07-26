@@ -102,23 +102,27 @@ func (s *Server) stationName(id string) string {
 // URL, so the onchange handler just navigates to this.value — no JS string
 // interpolation of user-controlled input, so it's XSS-safe.
 func (s *Server) stationSelect(lang, path, current string, preserve url.Values) string {
+	sts := s.stationsList()
+	curName := s.stationName(current)
 	var b strings.Builder
-	b.WriteString(`<span class="field" style="display:inline-flex;flex-direction:row;align-items:center;gap:.45rem;flex:0 0 auto">`)
-	b.WriteString(`<span class="field-label">` + t(lang, "col.station") + `</span>`)
-	b.WriteString(`<select onchange="if(this.value)location.href=this.value">`)
-	for _, st := range s.stationsList() {
+	b.WriteString(`<div class="st-sel">`)
+	b.WriteString(`<div class="st-btn" tabindex="0" onclick="this.parentNode.classList.toggle('open')">`)
+	b.WriteString(esc(curName))
+	b.WriteString(` <span class="csel-arrow">▾</span></div>`)
+	b.WriteString(`<div class="st-drop">`)
+	for _, st := range sts {
 		q := url.Values{}
 		q.Set("station", st.ID)
 		for k, vs := range preserve {
 			q[k] = append(q[k], vs...)
 		}
-		sel := ""
+		cls := "st-opt"
 		if st.ID == current {
-			sel = " selected"
+			cls = "st-opt cur"
 		}
-		b.WriteString(fmt.Sprintf(`<option value="%s"%s>%s</option>`, esc(path+"?"+q.Encode()), sel, esc(st.Name)))
+		b.WriteString(fmt.Sprintf(`<a class="%s" href="%s">%s</a>`, cls, esc(path+"?"+q.Encode()), esc(st.Name)))
 	}
-	b.WriteString(`</select></span>`)
+	b.WriteString(`</div></div>`)
 	return b.String()
 }
 
