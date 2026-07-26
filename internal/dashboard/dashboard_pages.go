@@ -73,7 +73,7 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	if isBrowser {
 		lang := s.lang(w, r)
 		body := `<h1>` + t(lang, "nav.metrics") + `</h1><p class="sub">Prometheus exposition format — scrape at <code>` + r.Host + `/metrics</code></p><div class="card"><pre style="font-size:.8rem;white-space:pre-wrap;overflow-x:auto">` + b.String() + `</pre></div>`
-		writeHTMLShell(w, lang, t(lang, "nav.metrics"), "metrics", body)
+		s.writeHTMLShell(w, lang, t(lang, "nav.metrics"), "metrics", body)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
@@ -193,7 +193,7 @@ func (s *Server) changesHTML(w http.ResponseWriter, r *http.Request) {
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.changes") + `</h1><p class="sub">` +
 		fmt.Sprintf(t(lang, "sub.changes"), stag) + `</p></div>` +
 		tabs + renderGroupedChangeTable(lang, cols, pageRows, pageTS, pageSev, pageFields) + pg
-	writeHTMLShell(w, lang, t(lang, "title.changes")+" · "+stName, "changes", body)
+	s.writeHTMLShell(w, lang, t(lang, "title.changes")+" · "+stName, "changes", body)
 }
 
 func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
@@ -232,7 +232,7 @@ func (s *Server) probesHTML(w http.ResponseWriter, r *http.Request) {
 			t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"),
 			t(lang, "col.cost"), t(lang, "col.status"),
 		}, pageRows) + pg
-	writeHTMLShell(w, lang, t(lang, "title.probes")+" · "+stName, "probes", body)
+	s.writeHTMLShell(w, lang, t(lang, "title.probes")+" · "+stName, "probes", body)
 }
 
 func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
@@ -251,11 +251,8 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 		sortMode = "ratio"
 	}
 	group := r.URL.Query().Get("group")
-	sts := s.stationsList() // cache once — avoids index-out-of-range if the list changes between calls
+	sts := s.stationsList()
 
-	// mode toggle (group × station is the default; model × station is the drill-down)
-	// Each toggle preserves the other mode's state so a group→model→group
-	// round-trip doesn't silently reset sort/field/group.
 	groupExtra := "&sort=" + url.QueryEscape(sortMode)
 	modelExtra := "&field=" + url.QueryEscape(field)
 	if model != "" {
@@ -264,22 +261,108 @@ func (s *Server) matrixHTML(w http.ResponseWriter, r *http.Request) {
 	if group != "" {
 		modelExtra += "&group=" + url.QueryEscape(group)
 	}
-	toggle := `<div class="field-sel">` + t(lang, "col.field") + `: `
-	toggle += modeBtn("group", mode, lang, "btn.matrixgroup", groupExtra)
-	toggle += modeBtn("model", mode, lang, "btn.matrixmodel", modelExtra)
-	toggle += `</div>`
+
+	// unified toolbar: mode toggle + mode-specific controls in one bar
+	var tb strings.Builder
+	tb.WriteString(`<div class="field-sel matrix-bar">`)
+	tb.WriteString(`<span class="bar-seg">` + t(lang, "col.field") + `: `)
+	tb.WriteString(modeBtn("group", mode, lang, "btn.matrixgroup", groupExtra))
+	tb.WriteString(modeBtn("model", mode, lang, "btn.matrixmodel", modelExtra))
+	tb.WriteString(`</span>`)
 
 	var tableHTML, subKey string
 	if mode == "model" {
-		tableHTML = s.matrixModelTable(lang, sts, field, model, group)
-		subKey = "sub.matrixmodel"
+		tableHTML, subKey = s.matrixModelTable(lang, sts, field, model, group)
+
+		// group selector segment
+		groups := s.matrixGroups(sts, model)
+		tb.WriteString(`<span class="bar-sep"></span><span class="bar-seg">` + t(lang, "col.group") + `: `)
+		allCls := "btn btn-sm btn-outline"
+		if group == "" {
+			allCls = "btn btn-sm"
+		}
+		allQ := "?mode=model&field=" + url.QueryEscape(field) + "&_=" + matrixVer
+		if model != "" {
+			allQ += "&model=" + url.QueryEscape(model)
+		}
+		tb.WriteString(fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, allCls, allQ, t(lang, "btn.matrixallgroups")))
+		for _, g := range groups {
+			cls := "btn btn-sm btn-outline"
+			if g == group {
+				cls = "btn btn-sm"
+			}
+			q := "?mode=model&field=" + url.QueryEscape(field) + "&group=" + url.QueryEscape(g) + "&_=" + matrixVer
+			if model != "" {
+				q += "&model=" + url.QueryEscape(model)
+			}
+			tb.WriteString(fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, cls, q, esc(g)))
+		}
+		tb.WriteString(`</span>`)
+
+		// field selector segment
+		fields := []struct{ key, label string }{
+			{"eff_in", t(lang, "col.effratio")}, {"eff_out", t(lang, "col.effout")},
+			{"ratio", t(lang, "col.modelratio")}, {"input", t(lang, "col.inputusd")},
+			{"output", t(lang, "col.outputusd")}, {"cache_read", t(lang, "col.cacheread")},
+			{"cache_write", t(lang, "col.cachewrite")},
+		}
+		tb.WriteString(`<span class="bar-sep"></span><span class="bar-seg">` + t(lang, "col.field") + `: `)
+		for _, f := range fields {
+			cls := "btn btn-sm btn-outline"
+			if f.key == field {
+				cls = "btn btn-sm"
+			}
+			q := "?mode=model&field=" + f.key + "&_=" + matrixVer
+			if model != "" {
+				q += "&model=" + url.QueryEscape(model)
+			}
+			if group != "" {
+				q += "&group=" + url.QueryEscape(group)
+			}
+			tb.WriteString(fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, cls, q, f.label))
+		}
+		tb.WriteString(`</span>`)
 	} else {
-		tableHTML = s.matrixGroupTable(lang, sts, sortMode)
-		subKey = "sub.matrix"
+		tableHTML, subKey = s.matrixGroupTable(lang, sts, sortMode)
+
+		// sort selector segment
+		sortModes := []struct{ key, label string }{
+			{"ratio", t(lang, "sort.ratio")}, {"name", t(lang, "sort.name")}, {"cov", t(lang, "sort.cov")},
+		}
+		tb.WriteString(`<span class="bar-sep"></span><span class="bar-seg">` + t(lang, "col.sort") + `: `)
+		for _, sm := range sortModes {
+			cls := "btn btn-sm btn-outline"
+			if sm.key == sortMode {
+				cls = "btn btn-sm"
+			}
+			tb.WriteString(fmt.Sprintf(`<a class="%s" href="/matrix?mode=group&sort=%s&_=%s">%s</a> `, cls, sm.key, matrixVer, sm.label))
+		}
+		tb.WriteString(`</span>`)
 	}
+	tb.WriteString(`</div>`)
+
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.matrix") + `</h1><p class="sub">` + t(lang, subKey) + `</p></div>` +
-		toggle + tableHTML
-	writeHTMLShell(w, lang, t(lang, "title.matrix"), "matrix", body)
+		tb.String() + tableHTML
+	s.writeHTMLShell(w, lang, t(lang, "title.matrix"), "matrix", body)
+}
+
+func (s *Server) matrixGroups(sts []domain.Station, modelFilter string) []string {
+	groupSet := map[string]bool{}
+	for _, st := range sts {
+		obs, _ := s.store.LatestRatioObservations(context.Background(), st.ID)
+		for _, o := range obs {
+			if modelFilter != "" && o.ModelName != modelFilter {
+				continue
+			}
+			groupSet[o.GroupName] = true
+		}
+	}
+	groups := make([]string, 0, len(groupSet))
+	for g := range groupSet {
+		groups = append(groups, g)
+	}
+	sort.Strings(groups)
+	return groups
 }
 
 // modeBtn renders a matrix mode toggle button (active when key==mode). extraQ
@@ -297,7 +380,7 @@ func modeBtn(key, mode, lang, labelKey, extraQ string) string {
 // ordered by sortMode: "ratio" = median ratio across stations (cheapest first,
 // the default), "name" = alphabetical, "cov" = number of stations carrying the
 // group (most coverage first).
-func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode string) string {
+func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode string) (string, string) {
 	type stGR struct {
 		name string
 		gr   map[string]float64
@@ -393,22 +476,7 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode st
 		}
 		dataRows = append(dataRows, row)
 	}
-	// sort-mode selector (group mode only)
-	sortSel := `<div class="field-sel">` + t(lang, "col.sort") + `: `
-	sortModes := []struct{ key, label string }{
-		{"ratio", t(lang, "sort.ratio")},
-		{"name", t(lang, "sort.name")},
-		{"cov", t(lang, "sort.cov")},
-	}
-	for _, sm := range sortModes {
-		cls := "btn btn-sm btn-outline"
-		if sm.key == sortMode {
-			cls = "btn btn-sm"
-		}
-		sortSel += fmt.Sprintf(`<a class="%s" href="/matrix?mode=group&sort=%s&_=%s">%s</a> `, cls, sm.key, matrixVer, sm.label)
-	}
-	sortSel += `</div>`
-	return sortSel + renderTable(lang, cols, dataRows)
+	return renderTable(lang, cols, dataRows), "sub.matrix"
 }
 
 // groupColorClass colors a group-ratio cell: low = cheap (green), high = expensive (orange).
@@ -432,7 +500,7 @@ func groupColorClass(v, lo, hi float64) string {
 // station's cheapest non-sentinel group for that model and annotates the cell
 // with the source group name; with a specific group selected it shows that
 // group's price per station (— where the station lacks the model in that group).
-func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, modelFilter, groupFilter string) string {
+func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, modelFilter, groupFilter string) (string, string) {
 	ctx := context.Background()
 	type cell struct {
 		val      float64
@@ -442,7 +510,6 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 	}
 	stCells := make([]map[string]cell, len(sts))
 	modelSet := map[string]bool{}
-	groupSet := map[string]bool{}
 	for i, st := range sts {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
 		m := map[string]cell{}
@@ -450,7 +517,6 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 			if modelFilter != "" && o.ModelName != modelFilter {
 				continue
 			}
-			groupSet[o.GroupName] = true
 			if groupFilter != "" && o.GroupName != groupFilter {
 				continue
 			}
@@ -509,62 +575,7 @@ func (s *Server) matrixModelTable(lang string, sts []domain.Station, field, mode
 		}
 		rows = append(rows, row)
 	}
-	// field selector (model mode only) — preserves model + group across switches
-	fields := []struct{ key, label string }{
-		{"eff_in", t(lang, "col.effratio")},
-		{"eff_out", t(lang, "col.effout")},
-		{"ratio", t(lang, "col.modelratio")},
-		{"input", t(lang, "col.inputusd")},
-		{"output", t(lang, "col.outputusd")},
-		{"cache_read", t(lang, "col.cacheread")},
-		{"cache_write", t(lang, "col.cachewrite")},
-	}
-	selector := `<div class="field-sel">` + t(lang, "col.field") + `: <span class="cur-field">` + fieldLabel(field, lang) + `</span> · `
-	for _, f := range fields {
-		cls := "btn btn-sm btn-outline"
-		if f.key == field {
-			cls = "btn btn-sm"
-		}
-		q := "?mode=model&field=" + f.key + "&_=" + matrixVer
-		if modelFilter != "" {
-			q += "&model=" + url.QueryEscape(modelFilter)
-		}
-		if groupFilter != "" {
-			q += "&group=" + url.QueryEscape(groupFilter)
-		}
-		selector += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, cls, q, f.label)
-	}
-	selector += `</div>`
-	// group selector (model mode only) — "All (cheapest)" + one chip per group,
-	// preserving field + model. Lets the user compare one group's prices cross-station.
-	groups := make([]string, 0, len(groupSet))
-	for g := range groupSet {
-		groups = append(groups, g)
-	}
-	sort.Strings(groups)
-	groupSel := `<div class="field-sel">` + t(lang, "col.group") + `: `
-	allCls := "btn btn-sm btn-outline"
-	if groupFilter == "" {
-		allCls = "btn btn-sm"
-	}
-	allQ := "?mode=model&field=" + url.QueryEscape(field) + "&_=" + matrixVer
-	if modelFilter != "" {
-		allQ += "&model=" + url.QueryEscape(modelFilter)
-	}
-	groupSel += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, allCls, allQ, t(lang, "btn.matrixallgroups"))
-	for _, g := range groups {
-		cls := "btn btn-sm btn-outline"
-		if g == groupFilter {
-			cls = "btn btn-sm"
-		}
-		q := "?mode=model&field=" + url.QueryEscape(field) + "&group=" + url.QueryEscape(g) + "&_=" + matrixVer
-		if modelFilter != "" {
-			q += "&model=" + url.QueryEscape(modelFilter)
-		}
-		groupSel += fmt.Sprintf(`<a class="%s" href="/matrix%s">%s</a> `, cls, q, esc(g))
-	}
-	groupSel += `</div>`
-	return groupSel + selector + renderTable(lang, cols, rows)
+	return renderTable(lang, cols, rows), "sub.matrixmodel"
 }
 
 // fmtCell formats a matrix cell value according to the active field:
@@ -583,26 +594,6 @@ func fmtCell(field string, v float64) string {
 // re-fetch instead of serving a stale ?field=… response.
 const matrixVer = "4"
 
-func fieldLabel(field, lang string) string {
-	switch field {
-	case "eff_in":
-		return t(lang, "col.effratio")
-	case "eff_out":
-		return t(lang, "col.effout")
-	case "ratio":
-		return t(lang, "col.modelratio")
-	case "input":
-		return t(lang, "col.inputusd")
-	case "output":
-		return t(lang, "col.outputusd")
-	case "cache_read":
-		return t(lang, "col.cacheread")
-	case "cache_write":
-		return t(lang, "col.cachewrite")
-	}
-	return esc(field)
-}
-
 func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
 	entries, _ := s.store.ListAuditLogs(r.Context(), paginationCap)
@@ -619,7 +610,7 @@ func (s *Server) auditHTML(w http.ResponseWriter, r *http.Request) {
 	pageRows, pg := paginateRows(lang, "/audit", "page", r.URL.Query(), rows)
 	body := `<div class="page-hdr"><h1>` + t(lang, "title.audit") + `</h1><p class="sub">` + t(lang, "sub.audit") + `</p></div>` +
 		renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.actor"), t(lang, "col.action"), t(lang, "col.target"), t(lang, "col.detail")}, pageRows) + pg
-	writeHTMLShell(w, lang, t(lang, "title.audit"), "audit", body)
+	s.writeHTMLShell(w, lang, t(lang, "title.audit"), "audit", body)
 }
 
 func fmtTime(t time.Time) string {
@@ -645,12 +636,10 @@ func fmtChangeVal(lang, val string) string {
 	return val
 }
 
-// renderGroupedChangeTable groups rows by ObservedAt timestamp. Batches with
-// ≤3 rows render inline; larger batches are wrapped in a collapsible
-// <details class="sec"> whose summary shows the timestamp, count and the
-// highest severity badge in that batch. group_ratio rows are ALWAYS rendered
-// inline (never collapsed) — ratio changes are the project's most important
-// data and must stay visible.
+// renderGroupedChangeTable renders all change rows in a single unified table.
+// Rows are grouped by ObservedAt timestamp; batches are separated by a thin
+// visual divider row. group_ratio rows are always highlighted (never hidden).
+// Non-ratio batches with >3 rows collapse the extras behind a toggle.
 func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []time.Time, sevs []string, fields []string) string {
 	if len(rows) == 0 {
 		return renderTable(lang, cols, rows)
@@ -659,7 +648,6 @@ func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []
 		rows   [][]string
 		fields []string
 		sevs   []string
-		sev    string
 		ts     time.Time
 	}
 	var batches []batch
@@ -672,57 +660,10 @@ func renderGroupedChangeTable(lang string, cols []string, rows [][]string, ts []
 		cur.rows = append(cur.rows, row)
 		cur.fields = append(cur.fields, fields[i])
 		cur.sevs = append(cur.sevs, sevs[i])
-		if sevRank(sevs[i]) > sevRank(cur.sev) {
-			cur.sev = sevs[i]
-		}
 	}
 	batches = append(batches, cur)
 
-	var b strings.Builder
-	for _, bt := range batches {
-		// Split: group_ratio rows always inline, rest may collapse.
-		var ratioRows, otherRows [][]string
-		otherSev := ""
-		for i, row := range bt.rows {
-			if bt.fields[i] == domain.FieldGroupRatio {
-				ratioRows = append(ratioRows, row)
-			} else {
-				otherRows = append(otherRows, row)
-				if sevRank(bt.sevs[i]) > sevRank(otherSev) {
-					otherSev = bt.sevs[i]
-				}
-			}
-		}
-		hasRatio := len(ratioRows) > 0
-		hasOther := len(otherRows) > 0
-		// Wrap ratio + other in a batch container so they look connected.
-		if hasRatio && hasOther {
-			b.WriteString(`<div class="change-batch">`)
-		}
-		// Ratio rows: always flat, highlighted.
-		if hasRatio {
-			b.WriteString(renderHighlightedTable(lang, cols, ratioRows, "ratio-row"))
-		}
-		// Other rows: collapse if >3, otherwise flat.
-		if hasOther {
-			if len(otherRows) <= 3 {
-				b.WriteString(renderTable(lang, cols, otherRows))
-			} else {
-				summary := fmt.Sprintf(t(lang, "batch.summary"), fmtTime(bt.ts), len(otherRows))
-				b.WriteString(`<details class="sec"><summary>` + summary + ` ` + severityBadge(lang, otherSev) + `</summary>`)
-				b.WriteString(renderTable(lang, cols, otherRows))
-				b.WriteString(`</details>`)
-			}
-		}
-		if hasRatio && hasOther {
-			b.WriteString(`</div>`)
-		}
-	}
-	return b.String()
-}
-
-// renderHighlightedTable is like renderTable but adds a CSS class to every <tr>.
-func renderHighlightedTable(lang string, cols []string, rows [][]string, rowClass string) string {
+	colSpan := fmt.Sprint(len(cols))
 	var b strings.Builder
 	b.WriteString(`<div class="tbl-wrap"><table><thead><tr>`)
 	for _, c := range cols {
@@ -731,14 +672,54 @@ func renderHighlightedTable(lang string, cols []string, rows [][]string, rowClas
 		b.WriteString("</th>")
 	}
 	b.WriteString("</tr></thead><tbody>")
-	for _, row := range rows {
-		b.WriteString(`<tr class="` + rowClass + `">`)
-		for _, cell := range row {
-			b.WriteString("<td>")
-			b.WriteString(cell)
-			b.WriteString("</td>")
+
+	batchID := 0
+	for bi, bt := range batches {
+		if bi > 0 {
+			b.WriteString(`<tr class="batch-sep"><td colspan="` + colSpan + `"></td></tr>`)
 		}
-		b.WriteString("</tr>")
+		var otherCount int
+		for i := range bt.rows {
+			if bt.fields[i] != domain.FieldGroupRatio {
+				otherCount++
+			}
+		}
+		collapsible := otherCount > 3
+		otherIdx := 0
+		for i, row := range bt.rows {
+			isRatio := bt.fields[i] == domain.FieldGroupRatio
+			cls := ""
+			hidden := ""
+			if isRatio {
+				cls = "ratio-row"
+			} else if collapsible {
+				otherIdx++
+				if otherIdx > 3 {
+					cls = fmt.Sprintf("batch-extra batch-extra-%d", batchID)
+					hidden = ` style="display:none"`
+				}
+			}
+			if cls != "" {
+				b.WriteString(`<tr class="` + cls + `"` + hidden + `>`)
+			} else {
+				b.WriteString("<tr>")
+			}
+			for _, cell := range row {
+				b.WriteString("<td>")
+				b.WriteString(cell)
+				b.WriteString("</td>")
+			}
+			b.WriteString("</tr>")
+		}
+		if collapsible {
+			extra := otherCount - 3
+			label := fmt.Sprintf(t(lang, "batch.showmore"), extra)
+			b.WriteString(`<tr class="batch-toggle-row"><td colspan="` + colSpan + `">`)
+			b.WriteString(fmt.Sprintf(`<a class="batch-toggle" href="javascript:void(0)" onclick="tmToggleBatch(%d,this)" data-more="%s" data-less="%s">%s</a>`,
+				batchID, html.EscapeString(label), html.EscapeString(t(lang, "batch.showless")), label))
+			b.WriteString(`</td></tr>`)
+			batchID++
+		}
 	}
 	b.WriteString("</tbody></table></div>")
 	return b.String()
@@ -803,7 +784,7 @@ func (s *Server) alertsHTML(w http.ResponseWriter, r *http.Request) {
 	pageRows, pg := paginateRows(lang, "/alerts", "page", r.URL.Query(), rows)
 	body := `<h1>` + t(lang, "title.alerts") + `</h1><p class="sub">` + t(lang, "sub.alerts") + `</p>` +
 		renderTable(lang, []string{t(lang, "col.time"), "rule", "station", "model", "payload", "sent", "error"}, pageRows) + pg
-	writeHTMLShell(w, lang, t(lang, "title.alerts"), "alerts", body)
+	s.writeHTMLShell(w, lang, t(lang, "title.alerts"), "alerts", body)
 }
 func truncate(s string, n int) string {
 	if len(s) > n {
@@ -895,5 +876,5 @@ func (s *Server) balanceHTML(w http.ResponseWriter, r *http.Request) {
 			t(lang, "col.station"), t(lang, "col.remaining"), t(lang, "col.used"),
 			t(lang, "col.total"), t(lang, "col.lastupdate"), t(lang, "col.source"), t(lang, "balance.trend"),
 		}, cells)
-	writeHTMLShell(w, lang, t(lang, "title.balance"), "balance", body)
+	s.writeHTMLShell(w, lang, t(lang, "title.balance"), "balance", body)
 }

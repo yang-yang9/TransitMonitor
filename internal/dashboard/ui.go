@@ -178,6 +178,10 @@ tr.ratio-row td{font-weight:600}
 .change-batch>details{border-radius:0 0 var(--radius) var(--radius);border-top:0}
 .change-batch>.tbl-wrap:last-child{border-radius:var(--radius)}
 .change-batch>details:first-child{border-radius:var(--radius)}
+tr.batch-sep td{height:6px;padding:0!important;border-bottom:none;background:transparent;position:relative}
+tr.batch-sep td::after{content:"";position:absolute;left:4%;right:4%;top:50%;border-top:1px dashed var(--border)}
+tr.batch-toggle-row td{padding:.35rem .8rem!important;border-bottom:1px solid var(--border);background:var(--bg-1)}
+.batch-toggle{font-size:.78rem;color:var(--primary);font-weight:600;cursor:pointer;text-decoration:none}
 .muted-cell{background:var(--bg-1)}
 .b-strong{font-weight:700}
 .dot-s{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}
@@ -231,6 +235,9 @@ tbody tr:hover{background:var(--row)}
 .btn-sm{padding:.3rem .7rem;font-size:.8rem;border-radius:var(--radius-xs)}
 .field-sel{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;margin:.6rem 0 1.1rem;padding:.65rem .9rem;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--primary);border-radius:var(--radius);box-shadow:var(--shadow)}
 .field-sel .cur-field{font-weight:700;color:var(--primary)}
+.matrix-bar{gap:.5rem .7rem}
+.bar-seg{display:inline-flex;flex-wrap:wrap;align-items:center;gap:.35rem;font-size:.85rem;font-weight:500;color:var(--ink2)}
+.bar-sep{width:1px;align-self:stretch;min-height:1.4rem;background:var(--border);margin:0 .3rem}
 .btn-group{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
 
 /* ── forms ── */
@@ -338,7 +345,7 @@ var navItems = []navItem{
 	{"/metrics", "", "metrics"},
 }
 
-func pageShell(lang, title, active, body string) string {
+func pageShell(lang, title, active, body string, showLogout bool) string {
 	var n strings.Builder
 	for _, it := range navItems {
 		cls := ""
@@ -352,9 +359,13 @@ func pageShell(lang, title, active, body string) string {
 	if lang == "en" {
 		other, otherLabel = "zh", "中"
 	}
+	logoutBtn := ""
+	if showLogout {
+		logoutBtn = `<button class="icon-btn" onclick="tmLogout()" title="` + t(lang, "logout") + `">⏻</button>`
+	}
 	tools := fmt.Sprintf(`<div class="tools"><button class="auto-btn" id="tm-autorefresh" onclick="tmToggleAuto()" title="Auto-refresh">🔄 <span id="tm-ar-label">60s</span></button>`+
 		`<button class="icon-btn" id="tm-theme" onclick="tmToggleTheme()" title="%s">🌙</button>`+
-		`<button class="lang-btn" onclick="tmSetLang('%s')">%s</button></div>`, t(lang, "theme"), other, otherLabel)
+		`<button class="lang-btn" onclick="tmSetLang('%s')">%s</button>%s</div>`, t(lang, "theme"), other, otherLabel, logoutBtn)
 	js := `<script>(function(){var d=document.documentElement,s=localStorage.getItem('tm-theme');` +
 		`if(s==='dark'||s==='light'){d.dataset.theme=s;}function syncTheme(){var b=document.getElementById('tm-theme');if(b)b.textContent=d.dataset.theme==='dark'?'☀️':'🌙';}syncTheme();` +
 		`window.tmToggleTheme=function(){var n=(d.dataset.theme==='dark')?'light':'dark';d.dataset.theme=n;localStorage.setItem('tm-theme',n);syncTheme();};` +
@@ -377,6 +388,8 @@ func pageShell(lang, title, active, body string) string {
 		// custom modal confirm
 		`window.tmConfirm=function(msg,cb){var o=document.getElementById('tm-modal');var t=document.getElementById('tm-modal-msg');t.textContent=msg;o.classList.add('show');` +
 		`document.getElementById('tm-modal-ok').onclick=function(){o.classList.remove('show');cb();};document.getElementById('tm-modal-cancel').onclick=function(){o.classList.remove('show');};};` +
+		`window.tmLogout=function(){fetch('/api/logout',{method:'POST'}).then(function(){location.href='/login';}).catch(function(){location.href='/login';});};` +
+		`window.tmToggleBatch=function(id,el){var rows=document.querySelectorAll('.batch-extra-'+id);var show=rows[0]&&rows[0].style.display==='none';rows.forEach(function(r){r.style.display=show?'':'none';});el.textContent=show?el.dataset.less:el.dataset.more;};` +
 		`})();</script>`
 	modalHTML := `<div class="modal-overlay" id="tm-modal"><div class="modal-box">` +
 		`<h3>` + t(lang, "modal.title") + `</h3><p id="tm-modal-msg"></p>` +
@@ -398,12 +411,12 @@ func pageShell(lang, title, active, body string) string {
 		lang, favicon, html.EscapeString(title), appCSS, n.String(), tools, body, modalHTML, js)
 }
 
-func writeHTMLShell(w http.ResponseWriter, lang, title, active, body string) {
+func (s *Server) writeHTMLShell(w http.ResponseWriter, lang, title, active, body string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	_, _ = w.Write([]byte(pageShell(lang, title, active, body)))
+	_, _ = w.Write([]byte(pageShell(lang, title, active, body, s.HasPassword())))
 }
 
 func renderTable(lang string, cols []string, rows [][]string) string {

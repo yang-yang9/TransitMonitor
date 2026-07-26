@@ -165,7 +165,7 @@ func TestMatrixGroupSort(t *testing.T) {
 		{ID: "s1", Name: "S1", Kind: domain.KindNewAPI, BaseURL: "https://a.example", Enabled: true},
 		{ID: "s2", Name: "S2", Kind: domain.KindSub2API, BaseURL: "https://b.example", Enabled: true},
 		{ID: "s3", Name: "S3", Kind: domain.KindNewAPI, BaseURL: "https://c.example", Enabled: true},
-	}, st, "")
+	}, st, "", "")
 	ctx := context.Background()
 	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
 	// s1: zebra=0.05, alpha=0.20, mango=0.12 ; s2: zebra=0.10, mango=0.30 ; s3: zebra=0.90 (outlier)

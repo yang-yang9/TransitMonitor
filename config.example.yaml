@@ -23,6 +23,7 @@ timezone: "Asia/Shanghai"   # IANA timezone for dashboard/audit/log timestamps; 
 dashboard:
   addr: "127.0.0.1:7421"
   token: ""                # set to require Authorization: Bearer <token> for non-localhost
+  password: ""             # set to enable browser login page (or env TRANSMONITOR_DASHBOARD_PASSWORD)
 
 alerts:
   rules:

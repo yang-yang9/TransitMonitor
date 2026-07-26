@@ -82,7 +82,7 @@ func (s *Server) stationsPage(w http.ResponseWriter, r *http.Request) {
 		`<p class="sub"><a class="btn" href="/stations/new">+ ` + t(lang, "title.newstation") + `</a></p></div>` +
 		renderTable(lang, []string{t(lang, "form.id"), t(lang, "form.name"), t(lang, "form.kind"), t(lang, "form.baseurl"), t(lang, "form.enabled"), ""}, rows) +
 		`<script>function tmDel(id){tmConfirm('` + t(lang, "form.confirm") + `',function(){fetch('/api/stations/'+id,{method:'DELETE'}).then(function(){location.reload();});});}</script>`
-	writeHTMLShell(w, lang, t(lang, "title.stations"), "stations", body)
+	s.writeHTMLShell(w, lang, t(lang, "title.stations"), "stations", body)
 }
 
 // GET /stations/{id} — station detail: ratios + recent changes + probes.
@@ -300,13 +300,13 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, modelPage) + mpg + `</details>` +
 			`<details class="sec"><summary>` + t(lang, "expand.probes") + ` (` + fmt.Sprintf("%d", len(probeRows)) + `)</summary>` +
 			renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.declared"), t(lang, "col.measured"), t(lang, "col.markup"), t(lang, "col.status")}, probePage) + ppg + `</details>`
-	writeHTMLShell(w, lang, esc(st.Name), "stations", body)
+	s.writeHTMLShell(w, lang, esc(st.Name), "stations", body)
 }
 
 // GET /stations/new — add-station form.
 func (s *Server) stationFormHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
-	writeHTMLShell(w, lang, t(lang, "title.newstation"), "stations", stationForm(lang, nil))
+	s.writeHTMLShell(w, lang, t(lang, "title.newstation"), "stations", stationForm(lang, nil))
 }
 
 // GET /stations/{id}/edit — edit-station form (pre-fills non-secret fields; secrets blank = keep).
@@ -317,7 +317,7 @@ func (s *Server) stationEditHTML(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "station not found", http.StatusNotFound)
 		return
 	}
-	writeHTMLShell(w, lang, t(lang, "title.editstation"), "stations", stationForm(lang, &st))
+	s.writeHTMLShell(w, lang, t(lang, "title.editstation"), "stations", stationForm(lang, &st))
 }
 
 // stationForm renders the add (edit==nil) or edit form. Secret fields are never

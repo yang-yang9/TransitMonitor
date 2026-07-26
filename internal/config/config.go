@@ -51,8 +51,9 @@ type AlertsConfig struct {
 }
 
 type DashboardConfig struct {
-	Addr  string `yaml:"addr"`
-	Token string `yaml:"token"`
+	Addr     string `yaml:"addr"`
+	Token    string `yaml:"token"`
+	Password string `yaml:"password"`
 }
 
 // Load reads and parses a config file. Stations default to enabled=true

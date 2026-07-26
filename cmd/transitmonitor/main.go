@@ -88,6 +88,9 @@ func main() {
 	if v := os.Getenv("TRANSMONITOR_DASHBOARD_TOKEN"); v != "" {
 		cfg.Dashboard.Token = v
 	}
+	if v := os.Getenv("TRANSMONITOR_DASHBOARD_PASSWORD"); v != "" {
+		cfg.Dashboard.Password = v
+	}
 	applyTimezone(logger, cfg.Timezone)
 
 	st, err := store.Open(cfg.DB.Path)
@@ -200,7 +203,7 @@ func main() {
 	if addr != "" {
 		dashAddr = addr
 	}
-	dash := dashboard.New(stations, st, cfg.Dashboard.Token)
+	dash := dashboard.New(stations, st, cfg.Dashboard.Token, cfg.Dashboard.Password)
 	dash.SetManager(sched) // enables web CRUD (add/remove stations at runtime)
 	dash.SetEncKey(encKey) // enables /settings notifier-secret persistence
 	dash.SetVersion(version)

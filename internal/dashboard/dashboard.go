@@ -4,6 +4,10 @@ package dashboard
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -36,15 +40,17 @@ type Updater interface {
 
 // Server is the dashboard HTTP server.
 type Server struct {
-	stations []domain.Station
-	store    *store.Store
-	token    string
-	encKey   []byte // for persisting /settings notifier secrets at rest
-	mgr      StationManager
-	updater  Updater
-	version  string // running build version, surfaced on /system + /api/system/version
-	mux      *chi.Mux
-	httpSrv  *http.Server
+	stations   []domain.Station
+	store      *store.Store
+	token      string
+	password   string // browser login password (empty = no login page)
+	sessionKey []byte // HMAC key for signing session cookies
+	encKey     []byte // for persisting /settings notifier secrets at rest
+	mgr        StationManager
+	updater    Updater
+	version    string // running build version, surfaced on /system + /api/system/version
+	mux        *chi.Mux
+	httpSrv    *http.Server
 }
 
 // SetEncKey enables /settings notifier-secret persistence (mirrors scheduler.SetEncKey).
@@ -58,13 +64,19 @@ func (s *Server) SetVersion(v string) { s.version = v }
 func (s *Server) SetUpdater(u Updater) { s.updater = u }
 
 // New constructs a dashboard server. token=="" means localhost-only.
-func New(stations []domain.Station, st *store.Store, token string) *Server {
-	s := &Server{stations: stations, store: st, token: token}
+// password enables browser login (GET /login → POST /api/login → session cookie).
+func New(stations []domain.Station, st *store.Store, token, password string) *Server {
+	sk := make([]byte, 32)
+	_, _ = rand.Read(sk)
+	s := &Server{stations: stations, store: st, token: token, password: password, sessionKey: sk}
 	r := chi.NewRouter()
 	r.Use(s.authMiddleware)
 	r.Get("/healthz", s.healthz)
 	r.Get("/metrics", s.metricsHandler)
 	r.Get("/readyz", s.readyz)
+	r.Get("/login", s.loginHTML)
+	r.Post("/api/login", s.loginAPI)
+	r.Post("/api/logout", s.logoutAPI)
 	r.Get("/", s.overviewHTML)
 	r.Get("/balance", s.balanceHTML)
 	r.Get("/changes", s.changesHTML)
@@ -92,8 +104,6 @@ func New(stations []domain.Station, st *store.Store, token string) *Server {
 	r.Post("/api/stations/{id}/login", s.stationsLogin)
 	r.Post("/api/settings", s.settingsSave)
 	r.Post("/api/settings/test", s.settingsTest)
-	// In-panel update / rollback / restart (sub2api-style). Protected by the
-	// same authMiddleware as every other mutation route on this mux.
 	r.Get("/api/system/version", s.systemVersionJSON)
 	r.Get("/api/system/check-updates", s.systemCheckUpdatesJSON)
 	r.Get("/api/system/rollback-versions", s.systemRollbackVersionsJSON)
@@ -131,16 +141,99 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == "/login" || r.URL.Path == "/api/login" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Bearer token (API clients).
+		if s.token != "" && r.Header.Get("Authorization") == "Bearer "+s.token {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Password-protected mode: check session cookie.
+		if s.password != "" {
+			if s.validSession(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+			} else {
+				http.Redirect(w, r, "/login", http.StatusFound)
+			}
+			return
+		}
+		// Token-only mode (no password): require Bearer header or localhost.
 		if s.token == "" {
 			if !isLocal(r.RemoteAddr) {
 				http.Error(w, "localhost only (set dashboard.token or TRANSMONITOR_DASHBOARD_PUBLIC=1)", http.StatusUnauthorized)
 				return
 			}
-		} else if r.Header.Get("Authorization") != "Bearer "+s.token {
+		} else {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+const sessionCookieName = "tm-session"
+const sessionMaxAge = 7 * 24 * 3600 // 7 days
+
+func (s *Server) signSession(ts int64) string {
+	payload := fmt.Sprintf("%d", ts)
+	mac := hmac.New(sha256.New, s.sessionKey)
+	mac.Write([]byte(payload))
+	sig := hex.EncodeToString(mac.Sum(nil))
+	return payload + "." + sig
+}
+
+func (s *Server) validSession(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	parts := strings.SplitN(c.Value, ".", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	payload := parts[0]
+	mac := hmac.New(sha256.New, s.sessionKey)
+	mac.Write([]byte(payload))
+	expected := hex.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(parts[1]), []byte(expected)) {
+		return false
+	}
+	var ts int64
+	if _, err := fmt.Sscanf(payload, "%d", &ts); err != nil {
+		return false
+	}
+	if time.Now().Unix()-ts > int64(sessionMaxAge) {
+		return false
+	}
+	return true
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter) {
+	val := s.signSession(time.Now().Unix())
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    val,
+		Path:     "/",
+		MaxAge:   sessionMaxAge,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 
@@ -295,6 +388,70 @@ func (s *Server) matrixJSON(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, cells)
 }
 
+// loginHTML renders the admin login page.
+func (s *Server) loginHTML(w http.ResponseWriter, r *http.Request) {
+	if s.password == "" {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	if s.validSession(r) {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	lang := s.lang(w, r)
+	errMsg := ""
+	if r.URL.Query().Get("err") == "1" {
+		errMsg = t(lang, "login.error")
+	}
+	writeLoginPage(w, lang, errMsg)
+}
+
+// loginAPI validates the password and sets a session cookie.
+func (s *Server) loginAPI(w http.ResponseWriter, r *http.Request) {
+	if s.password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no password configured"})
+		return
+	}
+	var in struct {
+		Password string `json:"password"`
+	}
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "application/json") {
+		_ = json.NewDecoder(r.Body).Decode(&in)
+	} else {
+		_ = r.ParseForm()
+		in.Password = r.FormValue("password")
+	}
+	if !hmac.Equal([]byte(in.Password), []byte(s.password)) {
+		if strings.HasPrefix(ct, "application/json") {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "wrong password"})
+		} else {
+			http.Redirect(w, r, "/login?err=1", http.StatusFound)
+		}
+		return
+	}
+	s.setSessionCookie(w)
+	if strings.HasPrefix(ct, "application/json") {
+		writeJSON(w, 200, map[string]string{"status": "ok"})
+	} else {
+		http.Redirect(w, r, "/", http.StatusFound)
+	}
+}
+
+// logoutAPI clears the session cookie.
+func (s *Server) logoutAPI(w http.ResponseWriter, r *http.Request) {
+	s.clearSessionCookie(w)
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "application/json") {
+		writeJSON(w, 200, map[string]string{"status": "ok"})
+	} else {
+		http.Redirect(w, r, "/login", http.StatusFound)
+	}
+}
+
+// HasPassword reports whether password-based login is enabled.
+func (s *Server) HasPassword() bool { return s.password != "" }
+
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	_, err := s.store.ListAuditLogs(r.Context(), 1)
 	if err != nil {
@@ -391,7 +548,7 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 		b.WriteString(fmt.Sprintf(`<a class="btn btn-sm" href="%s">%s</a>`, it.H, t(lang, "nav."+it.Key)))
 	}
 	b.WriteString(`</div></div>`)
-	writeHTMLShell(w, lang, t(lang, "title.overview"), "overview", b.String())
+	s.writeHTMLShell(w, lang, t(lang, "title.overview"), "overview", b.String())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

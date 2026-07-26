@@ -106,7 +106,7 @@ function tmSettingsTest(kind){
 }
 </script>`)
 
-	writeHTMLShell(w, lang, t(lang, "title.settings"), "settings", b.String())
+	s.writeHTMLShell(w, lang, t(lang, "title.settings"), "settings", b.String())
 }
 
 // pageBuilder is a tiny string builder with HTML-escape passthrough (callers

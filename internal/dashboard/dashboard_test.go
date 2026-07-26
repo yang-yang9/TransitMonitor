@@ -31,7 +31,7 @@ func newDash(t *testing.T, token string) (*Server, *store.Store, func()) {
 	srv := New([]domain.Station{
 		{ID: "s1", Name: "S1", Kind: domain.KindNewAPI, BaseURL: "https://a.example", Enabled: true},
 		{ID: "s2", Name: "S2", Kind: domain.KindSub2API, BaseURL: "https://b.example", Enabled: true},
-	}, st, token)
+	}, st, token, "")
 	return srv, st, func() { _ = st.Close() }
 }
 

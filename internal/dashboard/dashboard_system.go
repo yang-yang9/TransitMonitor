@@ -183,7 +183,7 @@ func (s *Server) systemHTML(w http.ResponseWriter, r *http.Request) {
 
 	if s.updater == nil {
 		b.w(`<div class="card"><div class="sys-banner b-warn">` + t(lang, "system.no_updater") + `</div></div>`)
-		writeHTMLShell(w, lang, t(lang, "title.system"), "system", b.String())
+		s.writeHTMLShell(w, lang, t(lang, "title.system"), "system", b.String())
 		return
 	}
 
@@ -289,5 +289,5 @@ fetch('/api/system/rollback-versions').then(function(r){return r.json();}).then(
 }).catch(function(){});
 </script>`)
 
-	writeHTMLShell(w, lang, t(lang, "title.system"), "system", b.String())
+	s.writeHTMLShell(w, lang, t(lang, "title.system"), "system", b.String())
 }
