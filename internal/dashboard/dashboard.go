@@ -525,22 +525,20 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 			if bal.Unlimited {
 				val = t(lang, "balance.unlimited")
 			}
-			balStr = fmt.Sprintf(`<div class="kpi-label">`+t(lang, "col.balance")+`</div><div class="kpi"><span class="badge-sm %s">%s</span></div>`, cls, val)
+			balStr = fmt.Sprintf(` <span class="badge-sm %s">%s %s</span>`, cls, t(lang, "col.balance"), val)
 		}
 		b.WriteString(fmt.Sprintf(
 			`<a class="card stcard" href="/stations/%s">`+
-				`<div class="st-hdr"><span class="st-name">%s</span><span class="dot-s %s"></span></div>`+
-				`%s`+
+				`<div class="st-hdr"><span class="st-name">%s%s</span><span class="dot-s %s"></span></div>`+
 				`%s`+
 				`%s`+
 				`<div class="meta">`+
-				`<span class="tag tag-pri">%s</span> <span class="tag">%s</span> · `+
+				`<span class="tag tag-pri">%s</span> · `+
 				`%d %s · %s: %s</div></a>`,
-			esc(st.ID), esc(name), dot,
-			balStr,
+			esc(st.ID), esc(name), balStr, dot,
 			chart,
 			changeHint,
-			esc(string(st.Kind)), esc(st.BaseURL),
+			esc(string(st.Kind)),
 			grpCount, t(lang, "meta.groups"), t(lang, "meta.lastscrape"), lastStr))
 	}
 	b.WriteString(`</div>`)
