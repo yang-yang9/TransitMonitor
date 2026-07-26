@@ -28,21 +28,37 @@ cd /home/admin/workspace/code/TransitMonitor
 `-selftest` must print `self-test PASSED`. If gofmt lists files → `gofmt -w` them
 (even other people's WIP files — it's a mechanical fix and unblocks CI).
 
-### 2. Tag + push
+### 2. Determine the next version number
+**ALWAYS check the remote first** — never assume the local tag list is complete:
+```bash
+git fetch --tags
+git tag -l 'v*' --sort=-version:refname | head -5   # latest tags, newest first
+```
+Or via the GitHub API (works even when local tags are stale):
+```bash
+TOK=$(grep 'github.alibaba-inc.com' ~/.git-credentials | grep -oE '://[^:]+:([^@]+)@' | sed 's|://[^:]*:||;s|@||' | head -1)
+curl -s -H "Authorization: Bearer $TOK" https://api.github.com/repos/yang-yang9/TransitMonitor/releases/latest \
+  | python3 -c "import sys,json;print('latest:',json.load(sys.stdin).get('tag_name','(none)'))"
+```
+Increment the patch (or minor/major) from the **highest existing tag**. Do NOT
+reuse an existing version number — force-pushing a tag overwrites the prior
+release's assets and confuses anyone who already pulled that version.
+
+### 3. Tag + push
 ```bash
 git tag -a vX.Y.Z -m "vX.Y.Z: <one-line summary>"
 git push origin vX.Y.Z
 ```
 Push goes through the Alibaba proxy automatically (pushInsteadOf is configured).
 
-### 3. Two workflows trigger on `v*` tags
+### 4. Two workflows trigger on `v*` tags
 - **`release.yml`** — builds `transitmonitor_{linux,darwin}_{amd64,arm64}.tar.gz` +
   `checksums.txt` (sha256sum format), uploads to a GitHub Release (auto notes).
 - **`docker.yml`** — builds `linux/amd64,linux/arm64` image →
   `ghcr.io/yang-yang9/transitmonitor:vX.Y.Z` + `:latest`, injects
   `VERSION=<tag>` via build-args (`-ldflags "-X main.version=<tag>"`).
 
-### 4. Monitor CI (repo is private → API needs the PAT)
+### 5. Monitor CI (repo is private → API needs the PAT)
 `gh` CLI isn't installed; use the API with the PAT already in `~/.git-credentials`
 (the `github.alibaba-inc.com` PAT works against `api.github.com`):
 ```bash
@@ -56,7 +72,7 @@ curl -s -H "Authorization: Bearer $TOK" https://api.github.com/repos/yang-yang9/
 ```
 Docker multi-arch (arm64 via QEMU) takes ~5-8 min. Poll with `sleep 180` between checks.
 
-### 5. If a workflow fails — fetch the failing step + logs
+### 6. If a workflow fails — fetch the failing step + logs
 ```bash
 RUN_ID=<from-the-runs-list>
 curl -s -H "Authorization: Bearer $TOK" "https://api.github.com/repos/yang-yang9/TransitMonitor/actions/runs/$RUN_ID/jobs" \
@@ -65,7 +81,7 @@ curl -sL -H "Authorization: Bearer $TOK" -o /tmp/logs.zip "https://api.github.co
 python3 -c "import zipfile;z=zipfile.ZipFile('/tmp/logs.zip');[print(n,'|',l[:200]) for n in z.namelist() for l in z.read(n).decode('utf-8','replace').splitlines() if any(k in l.lower() for k in ['error','fail','denied','not found','panic'])]"
 ```
 
-### 6. Common CI failures → fixes
+### 7. Common CI failures → fixes
 - **docker.yml: `COPY scripts/entrypoint.sh: not found` / `failed to calculate checksum`** →
   `.dockerignore` excludes `scripts/`. Add `!scripts/entrypoint.sh` under the
   `scripts/` line. (Hit on v0.0.2.)
@@ -74,7 +90,7 @@ python3 -c "import zipfile;z=zipfile.ZipFile('/tmp/logs.zip');[print(n,'|',l[:20
   `build-args: VERSION=${{ github.ref_name }}` and Dockerfile has `ARG VERSION` +
   `-X main.version=${VERSION}`.
 
-### 7. Re-tagging a broken release (image build failed)
+### 8. Re-tagging a broken release (image build failed)
 The cleanest fix when a tag's image didn't publish: fix on `main`, push, move the
 tag to the fixed commit, force-push (re-runs both workflows; `release.yml` updates
 the existing Release, binaries are rebuilt identical):
