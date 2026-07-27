@@ -214,11 +214,11 @@ func Run() error {
 		return fmt.Errorf("sb poll1: %w", err)
 	}
 	naObs, _ := st.LatestRatioObservations(ctx, "na")
-	if got := findIn(naObs, "gpt-4o"); got == nil || got.InputUSDPer1M != 2.5 {
+	if got := findIn(naObs, "gpt-4o", "default"); got == nil || got.InputUSDPer1M != 2.5 {
 		return fmt.Errorf("na baseline: want gpt-4o input 2.5 (1.25×2×1), got %+v", naObs)
 	}
 	sbObs, _ := st.LatestRatioObservations(ctx, "sb")
-	if got := findIn(sbObs, "gpt-4o-mini"); got == nil || got.InputUSDPer1M != 0.0375 {
+	if got := findIn(sbObs, "gpt-4o-mini", "default"); got == nil || got.InputUSDPer1M != 0.0375 {
 		return fmt.Errorf("sb baseline: want gpt-4o-mini input 0.0375 (1.5e-7×1e6×0.25), got %+v", sbObs)
 	}
 
@@ -262,9 +262,16 @@ func Run() error {
 	return nil
 }
 
-func findIn(obs []domain.RatioObservation, model string) *domain.RatioObservation {
+// findIn returns the observation matching both model AND group. Matching on
+// group too is essential: the sub2api adapter expands a station across multiple
+// groups, so a model can have several observations (one per group) with different
+// folded prices. LatestRatioObservations orders by observed_at DESC, which is
+// identical for a single poll, so slice order among same-timestamp rows is
+// non-deterministic — matching only on model made the baseline check flaky
+// (it returned whichever group's row happened to come first).
+func findIn(obs []domain.RatioObservation, model, group string) *domain.RatioObservation {
 	for i := range obs {
-		if obs[i].ModelName == model {
+		if obs[i].ModelName == model && obs[i].GroupName == group {
 			return &obs[i]
 		}
 	}
