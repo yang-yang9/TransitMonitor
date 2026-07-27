@@ -101,6 +101,9 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 .stcard .kpi-label{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:.4rem}
 .stcard .kpi{font-size:2.2rem;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;margin:.25rem 0;color:var(--ink);letter-spacing:-.02em}
 .stcard .meta{color:var(--muted);font-size:.82rem;line-height:1.7;word-break:break-all}
+.change-hints{display:flex;flex-wrap:wrap;align-items:center;gap:.2rem .5rem}
+.ch-item{white-space:nowrap}
+.ch-ts{font-size:.7rem;color:var(--muted);margin-left:.15rem}
 .gr-preview{display:flex;flex-wrap:wrap;gap:.3rem;margin:.15rem 0 .25rem}
 .badge-sm{display:inline-flex;align-items:center;gap:.15rem;font-size:.7rem;padding:.12rem .4rem;border-radius:5px;background:var(--bg-2);border:1px solid var(--border);color:var(--ink2);font-variant-numeric:tabular-nums;font-family:var(--mono)}
 .badge-sm.b-cheap{color:#059669;border-color:#6ee7b7;background:rgba(5,150,105,.08)}

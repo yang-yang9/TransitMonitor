@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -507,15 +508,46 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 		cfgs, _ := s.store.GetStationGroupConfigs(ctx, st.ID)
 		visible, hidden := domain.SplitVisible(domain.PartitionGroups(grs, grd, cfgs))
 		chart := groupRatioChart(lang, visible, false) + renderHiddenGroupsExpander(lang, hidden)
-		// recent group-ratio change hint
+		// recent group-ratio change hints (multi, sorted by group display order)
 		changeHint := ""
 		if evs, _ := s.store.ListChangeEvents(ctx, st.ID, 20); len(evs) > 0 {
+			// group display order index (visible + hidden combined)
+			allGroups := append(visible, hidden...)
+			orderIdx := make(map[string]int, len(allGroups))
+			for i, g := range allGroups {
+				orderIdx[g.Name] = i
+			}
+			// collect per-group most recent change (dedup by group name)
+			type grpChange struct {
+				idx int
+				ev  domain.ChangeEvent
+			}
+			seen := map[string]bool{}
+			var changes []grpChange
 			for _, e := range evs {
-				if e.Field == domain.FieldGroupRatio {
-					changeHint = fmt.Sprintf(`<div class="meta"><span class="badge b-warn">%s</span> %s → <b>%s</b> (%s)</div>`,
-						t(lang, "recent.change"), esc(e.Group), esc(e.New), fmtPct(e.DeltaPct))
+				if e.Field != domain.FieldGroupRatio || seen[e.Group] {
+					continue
+				}
+				seen[e.Group] = true
+				idx, ok := orderIdx[e.Group]
+				if !ok {
+					idx = len(allGroups)
+				}
+				changes = append(changes, grpChange{idx, e})
+				if len(changes) >= 5 {
 					break
 				}
+			}
+			if len(changes) > 0 {
+				sort.Slice(changes, func(i, j int) bool { return changes[i].idx < changes[j].idx })
+				var cb strings.Builder
+				cb.WriteString(`<div class="meta change-hints"><span class="badge b-warn">` + t(lang, "recent.change") + `</span>`)
+				for _, c := range changes {
+					cb.WriteString(fmt.Sprintf(` <span class="ch-item">%s → <b>%s</b> (%s)<span class="ch-ts">%s</span></span>`,
+						esc(c.ev.Group), esc(c.ev.New), fmtPct(c.ev.DeltaPct), fmtTimeShort(c.ev.ObservedAt)))
+				}
+				cb.WriteString(`</div>`)
+				changeHint = cb.String()
 			}
 		}
 		grpCount := len(grs)

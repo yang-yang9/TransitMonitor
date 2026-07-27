@@ -703,6 +703,23 @@ func fmtTime(t time.Time) string {
 	return t.Local().Format("2006-01-02 15:04:05")
 }
 
+func fmtTimeShort(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "<1m"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
 func fmtField(lang, field string) string {
 	if v := t(lang, "field."+field); v != "field."+field {
 		return v
