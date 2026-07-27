@@ -17,14 +17,14 @@ func TestPartitionGroups(t *testing.T) {
 	}
 	got := PartitionGroups(ratios, nil, cfgs)
 
-	// visible block first (by sort_order), then hidden block (by sort_order),
-	// unconfigured (default, internal) default to visible and land among the
-	// visible block by sort_order=0 then name.
+	// visible block first (by sort_order), then hidden block (by sort_order);
+	// within equal sort_order the default tie-break is ratio asc (cheapest first),
+	// then name. Unconfigured groups (default, internal) default to visible, sort_order 0.
 	want := []GroupDisplay{
-		{Name: "default", Ratio: 1.0, Visible: true, Order: 0}, // unconfigured, sort 0, name before vip
-		{Name: "internal", Ratio: 2.0, Visible: true, Order: 0},
-		{Name: "vip", Ratio: 0.5, Visible: true, Order: 0},
-		{Name: "svip", Ratio: 0.8, Visible: true, Order: 1},
+		{Name: "vip", Ratio: 0.5, Visible: true, Order: 0},      // sort 0, ratio 0.5
+		{Name: "default", Ratio: 1.0, Visible: true, Order: 0},  // sort 0, ratio 1.0 (unconfigured)
+		{Name: "internal", Ratio: 2.0, Visible: true, Order: 0}, // sort 0, ratio 2.0 (unconfigured)
+		{Name: "svip", Ratio: 0.8, Visible: true, Order: 1},     // sort 1
 		{Name: "pro", Ratio: 1.0, Visible: false, Order: 0},
 		{Name: "trial", Ratio: 1.5, Visible: false, Order: 1},
 	}
@@ -49,9 +49,9 @@ func TestPartitionGroupsEmptyConfigDefaultsVisible(t *testing.T) {
 			t.Errorf("group %s: unconfigured should default visible=true", g.Name)
 		}
 	}
-	// no config → sort_order 0 for all → stable name asc
+	// no config → sort_order 0 for all → default tie-break ratio asc (a=1.0 < b=2.0)
 	if got[0].Name != "a" || got[1].Name != "b" {
-		t.Errorf("name order wrong: %+v", got)
+		t.Errorf("ratio order wrong: %+v", got)
 	}
 }
 

@@ -202,6 +202,11 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 		if gi.Order != gj.Order {
 			return gi.Order < gj.Order
 		}
+		// default tie-break: cheapest group ratio first; GroupName keeps same-group
+		// rows adjacent when two groups share a ratio.
+		if gi.Ratio != gj.Ratio {
+			return gi.Ratio < gj.Ratio
+		}
 		if rows[i].o.GroupName != rows[j].o.GroupName {
 			return rows[i].o.GroupName < rows[j].o.GroupName
 		}
@@ -307,6 +312,10 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			}
 			if gi.Order != gj.Order {
 				return gi.Order < gj.Order
+			}
+			// default tie-break: cheapest ratio first, then name for determinism.
+			if gi.Ratio != gj.Ratio {
+				return gi.Ratio < gj.Ratio
 			}
 			return order[i] < order[j]
 		})
@@ -818,6 +827,8 @@ func (s *Server) renderGroupSettingsSection(lang string, stationID string, group
 		}
 		if v, ok := groupRatios[g]; ok {
 			r.hasRatio, r.ratio = true, v
+		} else {
+			r.ratio = 1e308 // orphan (configured but absent from current poll) → sort last within its tier
 		}
 		rows = append(rows, r)
 	}
@@ -827,6 +838,10 @@ func (s *Server) renderGroupSettingsSection(lang string, stationID string, group
 		}
 		if rows[i].order != rows[j].order {
 			return rows[i].order < rows[j].order
+		}
+		// default tie-break: cheapest ratio first, then name for determinism.
+		if rows[i].ratio != rows[j].ratio {
+			return rows[i].ratio < rows[j].ratio
 		}
 		return rows[i].name < rows[j].name
 	})
