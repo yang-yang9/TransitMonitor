@@ -108,6 +108,7 @@ func New(stations []domain.Station, st *store.Store, token, password string) *Se
 	r.Post("/api/settings/test", s.settingsTest)
 	r.Post("/api/settings/rules", s.settingsRulesSave)
 	r.Post("/api/settings/rules/reset", s.settingsRulesReset)
+	r.Post("/api/settings/behavior", s.settingsBehaviorSave)
 	r.Get("/api/system/version", s.systemVersionJSON)
 	r.Get("/api/system/check-updates", s.systemCheckUpdatesJSON)
 	r.Get("/api/system/rollback-versions", s.systemRollbackVersionsJSON)

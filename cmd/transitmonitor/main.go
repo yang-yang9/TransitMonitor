@@ -183,6 +183,9 @@ func main() {
 	if err := sched.LoadRules(context.Background()); err != nil {
 		logger.Warn("load alert rules", "err", err)
 	}
+	if err := sched.LoadBehavior(context.Background()); err != nil {
+		logger.Warn("load alert behavior", "err", err)
+	}
 	sched.Prober = probe.NewProber(httpClient)
 
 	_ = st.InsertAuditLog(context.Background(), "main", "startup", "",

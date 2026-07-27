@@ -224,6 +224,23 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 	b.w(`<button type="button" class="btn" onclick="tmSaveRules()">` + t(lang, "btn.save_rules") + `</button>`)
 	b.w(`</div>`)
 
+	// ── alert behavior: cooldown + digest interval ──
+	cooldownMin, digestMin := 30, 0
+	if bev, ok := s.mgr.(interface {
+		AlertBehavior() (int, int)
+	}); ok {
+		cooldownMin, digestMin = bev.AlertBehavior()
+	}
+	b.w(`<div class="card behavior-card"><div class="form-grid">`)
+	b.w(`<div class="field"><span class="field-label">` + t(lang, "form.cooldown") + `</span>`)
+	b.w(`<input id="beh-cooldown" type="number" min="0" step="1" value="` + fmt.Sprintf("%d", cooldownMin) + `">`)
+	b.w(`<p class="meta">` + t(lang, "form.cooldown.hint") + `</p></div>`)
+	b.w(`<div class="field"><span class="field-label">` + t(lang, "form.digest") + `</span>`)
+	b.w(`<input id="beh-digest" type="number" min="0" step="1" value="` + fmt.Sprintf("%d", digestMin) + `">`)
+	b.w(`<p class="meta">` + t(lang, "form.digest.hint") + `</p></div>`)
+	b.w(`<div class="field full"><button type="button" class="btn" onclick="tmSaveBehavior()">` + t(lang, "btn.save_behavior") + `</button></div>`)
+	b.w(`</div></div>`)
+
 	b.w(`</div>`)
 
 	// JS options arrays
@@ -306,6 +323,13 @@ function tmResetRules(){
   if(!confirm(` + jsQuote(t(lang, "btn.reset_rules")+"?") + `))return;
   fetch('/api/settings/rules/reset',{method:'POST'})
     .then(function(r){ if(r.ok){ alert(` + jsQuote(t(lang, "settings.rules.reset")) + `); location.reload(); } else { r.text().then(function(t){ alert(t); }); } })
+    .catch(function(e){ alert(e); });
+}
+function tmSaveBehavior(){
+  var cd=document.getElementById('beh-cooldown').value;
+  var di=document.getElementById('beh-digest').value;
+  fetch('/api/settings/behavior',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cooldown_minutes:parseInt(cd)||0,digest_interval_minutes:parseInt(di)||0})})
+    .then(function(r){ if(r.ok){ alert(` + jsQuote(t(lang, "settings.behavior.saved")) + `); } else { r.text().then(function(t){ alert(t); }); } })
     .catch(function(e){ alert(e); });
 }
 // Set initial direction-field state for existing rows (disable for non-directional types).
@@ -439,4 +463,33 @@ func (s *Server) settingsRulesReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{"status": "reset"})
+}
+
+// settingsBehaviorSave handles POST /api/settings/behavior (cooldown + digest).
+func (s *Server) settingsBehaviorSave(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
+	if s.mgr == nil {
+		http.Error(w, t(lang, "settings.no.manager"), http.StatusServiceUnavailable)
+		return
+	}
+	var in struct {
+		CooldownMinutes       int `json:"cooldown_minutes"`
+		DigestIntervalMinutes int `json:"digest_interval_minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	saver, ok := s.mgr.(interface {
+		SaveAlertBehavior(context.Context, int, int) error
+	})
+	if !ok {
+		http.Error(w, t(lang, "settings.no.manager"), http.StatusServiceUnavailable)
+		return
+	}
+	if err := saver.SaveAlertBehavior(r.Context(), in.CooldownMinutes, in.DigestIntervalMinutes); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "saved"})
 }

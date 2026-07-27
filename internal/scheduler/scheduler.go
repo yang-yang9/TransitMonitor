@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +53,13 @@ type Scheduler struct {
 	lastAlert             map[string]time.Time
 	alertMu               sync.Mutex
 
+	// Per-station digest: events buffer + last-flush time. digestInterval is the
+	// min gap between digest deliveries per station (0 = flush every poll).
+	digestInterval time.Duration
+	digestMu       sync.Mutex
+	pendingAlerts  map[string][]alert.AlertEvent
+	lastDigest     map[string]time.Time
+
 	failMu     sync.Mutex
 	failStreak map[string]int  // consecutive poll failures per station
 	authOK     map[string]bool // last known auth state per station (true = OK)
@@ -64,6 +73,8 @@ func New(stations []domain.Station, adapters map[string]adapter.Adapter, st *sto
 		cancels:               map[string]context.CancelFunc{},
 		cooldown:              30 * time.Minute,
 		lastAlert:             map[string]time.Time{},
+		pendingAlerts:         map[string][]alert.AlertEvent{},
+		lastDigest:            map[string]time.Time{},
 		failStreak:            map[string]int{},
 		authOK:                map[string]bool{},
 		snapshotRetentionDays: 7, obsRetentionDays: 30,
@@ -163,7 +174,7 @@ func (s *Scheduler) evaluateBalanceRules(ctx context.Context, stationID string, 
 		}
 		if bal.RemainingUSD < r.Threshold {
 			s.dispatchAlert(ctx, alert.AlertEvent{
-				Rule: r.Name, StationID: stationID, Severity: domain.SevCritical,
+				Rule: r.Name, Type: alert.RuleQuotaBelow, StationID: stationID, Severity: domain.SevCritical,
 				Payload: map[string]any{
 					"remaining_usd": bal.RemainingUSD, "used_usd": bal.UsedUSD,
 					"total_usd": bal.TotalUSD, "threshold_usd": r.Threshold,
@@ -184,7 +195,7 @@ func (s *Scheduler) evaluateBalanceRules(ctx context.Context, stationID string, 
 		signedDelta := -dropPct // positive = balance up, negative = balance down
 		if abs64(dropPct) >= r.Threshold && matchQuotaDirection(r.Direction, signedDelta) {
 			s.dispatchAlert(ctx, alert.AlertEvent{
-				Rule: r.Name, StationID: stationID, Severity: domain.SevWarning,
+				Rule: r.Name, Type: alert.RuleQuotaDropPct, StationID: stationID, Severity: domain.SevWarning,
 				Payload: map[string]any{
 					"prev_usd": prev.RemainingUSD, "remaining_usd": bal.RemainingUSD,
 					"drop_pct": dropPct, "threshold_pct": r.Threshold,
@@ -221,6 +232,10 @@ func matchQuotaDirection(dir string, signedDelta float64) bool {
 // observes the condition retries immediately — otherwise a transient notifier
 // failure (5xx / network blip) would suppress re-firing for the full cooldown
 // window, leaving the operator blind to a condition that never landed.
+// dispatchAlert buffers an event for per-station digest delivery. The event is
+// only added if it passes the cooldown dedup (same rule|station|model within
+// cooldown is dropped). Actual delivery happens at flushStationAlerts, called
+// at the end of each poll/probe cycle.
 func (s *Scheduler) dispatchAlert(ctx context.Context, ev alert.AlertEvent) {
 	if s.Notifier == nil {
 		return
@@ -228,12 +243,90 @@ func (s *Scheduler) dispatchAlert(ctx context.Context, ev alert.AlertEvent) {
 	if !s.shouldFire(ev) {
 		return
 	}
-	sendErr := s.Notifier.Send(ctx, ev)
-	if sendErr != nil {
-		s.clearAlertCooldown(ev)
+	s.digestMu.Lock()
+	defer s.digestMu.Unlock()
+	if s.pendingAlerts == nil { // lazy init (test schedulers may skip New)
+		s.pendingAlerts = map[string][]alert.AlertEvent{}
 	}
-	payload, _ := json.Marshal(ev.Payload)
-	_ = s.Store.InsertAlertEvent(ctx, ev.Rule, ev.StationID, ev.Model, string(payload), sendErr == nil, errStr(sendErr))
+	s.pendingAlerts[ev.StationID] = append(s.pendingAlerts[ev.StationID], ev)
+}
+
+// flushStationAlerts delivers one digest message per station if the digest
+// interval has elapsed (or interval is 0 → every call). Otherwise the buffer
+// is retained until the next eligible flush. Records each event in
+// alert_events with the digest's send status; on failure clears the cooldowns
+// so events can re-fire next poll.
+func (s *Scheduler) flushStationAlerts(ctx context.Context, stationID string) {
+	if s.Notifier == nil {
+		return
+	}
+	s.digestMu.Lock()
+	buf := s.pendingAlerts[stationID]
+	now := s.Now()
+	if len(buf) == 0 {
+		s.digestMu.Unlock()
+		return
+	}
+	if s.lastDigest == nil { // lazy init (test schedulers may skip New)
+		s.lastDigest = map[string]time.Time{}
+	}
+	if s.digestInterval > 0 {
+		if last, ok := s.lastDigest[stationID]; ok && now.Sub(last) < s.digestInterval {
+			s.digestMu.Unlock() // not yet → keep buffering
+			return
+		}
+	}
+	delete(s.pendingAlerts, stationID)
+	s.lastDigest[stationID] = now
+	s.digestMu.Unlock()
+
+	// Build a digest AlertEvent joining per-event Messages.
+	msgs := make([]string, 0, len(buf))
+	maxSev := ""
+	for _, e := range buf {
+		if e.Message == "" {
+			e.Message = alert.FormatEvent(e)
+		}
+		msgs = append(msgs, e.Message)
+		maxSev = severityRank(e.Severity, maxSev)
+	}
+	body := fmt.Sprintf("🚨 告警汇总 · %s（%d 条）\n─────────────\n%s",
+		stationID, len(buf), strings.Join(msgs, "\n─────────────\n"))
+	digest := alert.AlertEvent{
+		Rule: "告警汇总", Type: "digest", StationID: stationID,
+		Severity: maxSev, Message: body, CreatedAt: now,
+		Payload: map[string]any{"count": len(buf), "station_id": stationID},
+	}
+	sendErr := s.Notifier.Send(ctx, digest)
+
+	for _, e := range buf {
+		payload, _ := json.Marshal(e.Payload)
+		_ = s.Store.InsertAlertEvent(ctx, e.Rule, e.StationID, e.Model, string(payload), sendErr == nil, errStr(sendErr))
+	}
+	if sendErr != nil {
+		for _, e := range buf {
+			s.clearAlertCooldown(e)
+		}
+	}
+}
+
+// severityRank returns the more severe of a/b (critical>warning>info).
+func severityRank(a, b string) string {
+	rank := func(s string) int {
+		switch s {
+		case "critical":
+			return 3
+		case "warning":
+			return 2
+		case "info":
+			return 1
+		}
+		return 0
+	}
+	if rank(a) >= rank(b) {
+		return a
+	}
+	return b
 }
 
 // clearAlertCooldown removes the cooldown stamp for an event so a failed send
@@ -279,7 +372,7 @@ func (s *Scheduler) recordPollFailure(ctx context.Context, stationID string, err
 	if isAuth && wasOK {
 		for _, r := range s.rulesOfType(alert.RuleEndpointAuthFail) {
 			s.dispatchAlert(ctx, alert.AlertEvent{
-				Rule: r.Name, StationID: stationID, Severity: "critical",
+				Rule: r.Name, Type: alert.RuleEndpointAuthFail, StationID: stationID, Severity: "critical",
 				Payload:   map[string]any{"status": "auth_failed", "error": err.Error(), "observed_at": now},
 				CreatedAt: now,
 			})
@@ -295,7 +388,7 @@ func (s *Scheduler) recordPollFailure(ctx context.Context, stationID string, err
 		}
 		if streak == threshold {
 			s.dispatchAlert(ctx, alert.AlertEvent{
-				Rule: r.Name, StationID: stationID, Severity: "critical",
+				Rule: r.Name, Type: alert.RulePollFailureStreak, StationID: stationID, Severity: "critical",
 				Payload:   map[string]any{"streak": streak, "error": err.Error(), "threshold": threshold, "observed_at": now},
 				CreatedAt: now,
 			})
@@ -413,6 +506,7 @@ func (s *Scheduler) ReorderStations(ids []string) error {
 
 // PollOnce runs one scrape→store→diff→alert cycle for a station.
 func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
+	defer s.flushStationAlerts(ctx, stationID)
 	s.mu.Lock()
 	a := s.Adapters[stationID]
 	var stn domain.Station
@@ -641,6 +735,7 @@ func (s *Scheduler) runProbeCycle(ctx context.Context, st domain.Station) {
 		return
 	}
 	s.runStationProbe(ctx, st, obs)
+	s.flushStationAlerts(ctx, st.ID)
 }
 
 func (s *Scheduler) pollLoop(ctx context.Context, st domain.Station, interval time.Duration) {
@@ -928,4 +1023,83 @@ func (s *Scheduler) SaveAlertRules(ctx context.Context, rules []alert.Rule) erro
 // ResetRules restores the YAML-derived default rules.
 func (s *Scheduler) ResetRules(ctx context.Context) error {
 	return s.SaveAlertRules(ctx, s.baseRules)
+}
+
+const (
+	appSettingCooldown       = "alert_cooldown_minutes"
+	appSettingDigestInterval = "alert_digest_interval_minutes"
+	defaultCooldownMinutes   = 30
+	defaultDigestMinutes     = 0 // 0 = flush every poll (per-poll digest)
+)
+
+// AlertBehavior returns the current cooldown (min) and digest interval (min).
+func (s *Scheduler) AlertBehavior() (cooldownMin, digestMin int) {
+	c := int(s.cooldown / time.Minute)
+	d := int(s.digestInterval / time.Minute)
+	if c < 0 {
+		c = 0
+	}
+	if d < 0 {
+		d = 0
+	}
+	return c, d
+}
+
+// LoadBehavior loads cooldown + digest interval from the store, seeding defaults
+// on first run. Called at startup.
+func (s *Scheduler) LoadBehavior(ctx context.Context) error {
+	cd, okCd, err := s.Store.GetAppSetting(ctx, appSettingCooldown)
+	if err != nil {
+		return err
+	}
+	di, okDi, err := s.Store.GetAppSetting(ctx, appSettingDigestInterval)
+	if err != nil {
+		return err
+	}
+	if !okCd {
+		cd = strconv.Itoa(defaultCooldownMinutes)
+		if err := s.Store.SetAppSetting(ctx, appSettingCooldown, cd); err != nil {
+			return err
+		}
+	}
+	if !okDi {
+		di = strconv.Itoa(defaultDigestMinutes)
+		if err := s.Store.SetAppSetting(ctx, appSettingDigestInterval, di); err != nil {
+			return err
+		}
+	}
+	cMin, _ := strconv.Atoi(cd)
+	dMin, _ := strconv.Atoi(di)
+	if cMin < 0 {
+		cMin = 0
+	}
+	if dMin < 0 {
+		dMin = 0
+	}
+	s.cooldown = time.Duration(cMin) * time.Minute
+	s.digestInterval = time.Duration(dMin) * time.Minute
+	return nil
+}
+
+// SaveAlertBehavior persists cooldown + digest interval and applies live.
+func (s *Scheduler) SaveAlertBehavior(ctx context.Context, cooldownMin, digestMin int) error {
+	if cooldownMin < 0 || digestMin < 0 {
+		return fmt.Errorf("cooldown 和聚合间隔不能为负")
+	}
+	if err := s.Store.SetAppSetting(ctx, appSettingCooldown, strconv.Itoa(cooldownMin)); err != nil {
+		return err
+	}
+	if err := s.Store.SetAppSetting(ctx, appSettingDigestInterval, strconv.Itoa(digestMin)); err != nil {
+		return err
+	}
+	s.cooldown = time.Duration(cooldownMin) * time.Minute
+	s.digestInterval = time.Duration(digestMin) * time.Minute
+	// A behavior change should let stale alerts re-fire.
+	s.alertMu.Lock()
+	s.lastAlert = map[string]time.Time{}
+	s.alertMu.Unlock()
+	s.digestMu.Lock()
+	s.lastDigest = map[string]time.Time{}
+	s.digestMu.Unlock()
+	return nil
 }

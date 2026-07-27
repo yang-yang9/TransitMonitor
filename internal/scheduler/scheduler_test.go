@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,19 @@ import (
 	"transitmonitor/internal/domain"
 	"transitmonitor/internal/store"
 )
+
+// digestHasRule reports whether sink received a digest message mentioning the
+// given rule name (alerts are delivered as per-station digests).
+func digestHasRule(sink *alert.SinkNotifier, rule string) int {
+	n := 0
+	needle := "规则「" + rule + "」"
+	for _, ev := range sink.Sent {
+		if strings.Contains(ev.Message, needle) {
+			n++
+		}
+	}
+	return n
+}
 
 // mockAdapter returns a canned observation set, so the scheduler's
 // probe→fetch→store→diff→alert wiring is tested with zero real I/O.
@@ -150,8 +164,11 @@ func TestPollOnce_PollFailureStreak(t *testing.T) {
 	if len(sink.Sent) != 1 {
 		t.Fatalf("after 3 failures: want 1 streak alert, got %d", len(sink.Sent))
 	}
-	if sink.Sent[0].Rule != "streak3" {
-		t.Errorf("alert rule: want streak3, got %s", sink.Sent[0].Rule)
+	if sink.Sent[0].Rule != "告警汇总" {
+		t.Errorf("want digest rule, got %s", sink.Sent[0].Rule)
+	}
+	if digestHasRule(sink, "streak3") != 1 {
+		t.Errorf("digest should mention streak3, got %d", digestHasRule(sink, "streak3"))
 	}
 
 	// A 4th failure does NOT refire (streak 4 != threshold 3).
@@ -222,8 +239,11 @@ func TestPollOnce_EndpointAuthFailed(t *testing.T) {
 	if len(sink.Sent) != 1 {
 		t.Fatalf("OK→failed flip: want 1 auth alert, got %d", len(sink.Sent))
 	}
-	if sink.Sent[0].Rule != "authfail" {
-		t.Errorf("rule: want authfail, got %s", sink.Sent[0].Rule)
+	if sink.Sent[0].Rule != "告警汇总" {
+		t.Errorf("want digest rule, got %s", sink.Sent[0].Rule)
+	}
+	if digestHasRule(sink, "authfail") != 1 {
+		t.Errorf("digest should mention authfail, got %d", digestHasRule(sink, "authfail"))
 	}
 
 	// A second auth failure does NOT refire (still-failed, not a fresh flip).

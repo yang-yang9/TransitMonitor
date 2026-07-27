@@ -81,13 +81,8 @@ func TestPollOnce_BalanceStoredAndLowAlert(t *testing.T) {
 	if got.RemainingUSD != 0.50 || got.Currency != "USD" {
 		t.Errorf("stored balance wrong: %+v", got)
 	}
-	// quota_below fired exactly once.
-	n := 0
-	for _, ev := range sink.Sent {
-		if ev.Rule == "low" {
-			n++
-		}
-	}
+	// quota_below fired exactly once (delivered as a digest mentioning "low").
+	n := digestHasRule(sink, "low")
 	if n != 1 {
 		t.Errorf("want 1 low alert, got %d", n)
 	}
@@ -115,15 +110,7 @@ func TestPollOnce_BalanceDropPctAlert(t *testing.T) {
 	if err := sched.PollOnce(ctx, "s1"); err != nil {
 		t.Fatalf("poll2: %v", err)
 	}
-	nLow, nDrop := 0, 0
-	for _, ev := range sink.Sent {
-		switch ev.Rule {
-		case "low":
-			nLow++
-		case "drop":
-			nDrop++
-		}
-	}
+	nLow, nDrop := digestHasRule(sink, "low"), digestHasRule(sink, "drop")
 	if nLow != 0 {
 		t.Errorf("want 0 low alerts (still above $1), got %d", nLow)
 	}

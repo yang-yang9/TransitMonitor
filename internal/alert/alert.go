@@ -79,10 +79,12 @@ func matchDirection(dir string, signedDelta float64) bool {
 // AlertEvent is a fired alert awaiting/after delivery.
 type AlertEvent struct {
 	Rule      string
+	Type      string
 	StationID string
 	Model     string
 	Severity  string
 	Payload   map[string]any
+	Message   string // fully-formatted body; notifiers use it if non-empty
 	CreatedAt time.Time
 	Sent      bool
 	Error     string
@@ -104,19 +106,19 @@ func Evaluate(rules []Rule, events []domain.ChangeEvent, probes []domain.ProbeRe
 					e.Field == domain.FieldOutput || e.Field == "output_usd_per_1m" ||
 					e.Field == domain.FieldNative || e.Field == "native_ratio") &&
 					abs(e.DeltaPct) >= r.Threshold && matchDirection(r.Direction, e.DeltaPct) {
-					out = append(out, fromChange(r.Name, e, map[string]any{"delta_pct": e.DeltaPct, "delta_abs": e.DeltaAbs}))
+					out = append(out, fromChange(r, e, map[string]any{"delta_pct": e.DeltaPct, "delta_abs": e.DeltaAbs}))
 				}
 			}
 		case RuleDeltaAbs:
 			for _, e := range events {
 				if abs(e.DeltaAbs) >= r.Threshold && matchDirection(r.Direction, e.DeltaAbs) {
-					out = append(out, fromChange(r.Name, e, map[string]any{"delta_abs": e.DeltaAbs}))
+					out = append(out, fromChange(r, e, map[string]any{"delta_abs": e.DeltaAbs}))
 				}
 			}
 		case RuleGroupRatioDeltaPct:
 			for _, e := range events {
 				if e.Field == domain.FieldGroupRatio && abs(e.DeltaPct) >= r.Threshold && matchDirection(r.Direction, e.DeltaPct) {
-					out = append(out, fromChange(r.Name, e, map[string]any{
+					out = append(out, fromChange(r, e, map[string]any{
 						"group": e.Group, "delta_pct": e.DeltaPct, "delta_abs": e.DeltaAbs,
 					}))
 				}
@@ -124,20 +126,20 @@ func Evaluate(rules []Rule, events []domain.ChangeEvent, probes []domain.ProbeRe
 		case RuleModelAdded:
 			for _, e := range events {
 				if e.Field == domain.FieldPresence && e.New == "added" {
-					out = append(out, fromChange(r.Name, e, map[string]any{"change": "model_added"}))
+					out = append(out, fromChange(r, e, map[string]any{"change": "model_added"}))
 				}
 			}
 		case RuleModelRemoved:
 			for _, e := range events {
 				if e.Field == domain.FieldPresence && e.New == "removed" {
-					out = append(out, fromChange(r.Name, e, map[string]any{"change": "model_removed"}))
+					out = append(out, fromChange(r, e, map[string]any{"change": "model_removed"}))
 				}
 			}
 		case RuleProbeMarkupPct:
 			for _, p := range probes {
 				if abs(p.MarkupPct) >= r.Threshold && matchDirection(r.Direction, p.MarkupPct) {
 					out = append(out, AlertEvent{
-						Rule: r.Name, StationID: p.StationID, Model: p.Model,
+						Rule: r.Name, Type: r.Type, StationID: p.StationID, Model: p.Model,
 						Severity:  "warning",
 						Payload:   map[string]any{"markup_pct": p.MarkupPct, "measured_usd_per_1m": p.MeasuredUSDPer1M, "declared_usd_per_1m": p.DeclaredEffectiveUSDPer1M, "cost_usd": p.CostUSD},
 						CreatedAt: p.ObservedAt,
@@ -146,10 +148,13 @@ func Evaluate(rules []Rule, events []domain.ChangeEvent, probes []domain.ProbeRe
 			}
 		}
 	}
+	for i := range out {
+		out[i].Message = FormatEvent(out[i])
+	}
 	return out
 }
 
-func fromChange(rule string, e domain.ChangeEvent, extra map[string]any) AlertEvent {
+func fromChange(r Rule, e domain.ChangeEvent, extra map[string]any) AlertEvent {
 	payload := map[string]any{
 		"station": e.StationID, "model": e.Model, "field": e.Field,
 		"old": e.Old, "new": e.New, "delta_pct": e.DeltaPct, "severity": e.Severity,
@@ -159,10 +164,84 @@ func fromChange(rule string, e domain.ChangeEvent, extra map[string]any) AlertEv
 		payload[k] = v
 	}
 	return AlertEvent{
-		Rule: rule, StationID: e.StationID, Model: e.Model,
+		Rule: r.Name, Type: r.Type, StationID: e.StationID, Model: e.Model,
 		Severity: e.Severity, Payload: payload, CreatedAt: e.ObservedAt,
 	}
 }
+
+// FormatEvent renders a concise, human-readable body for an alert event,
+// specialized per rule type. Leads with an emoji + label + station + model,
+// followed by the key change. Used as the notification body (and concatenated
+// in digest mode).
+func FormatEvent(ev AlertEvent) string {
+	sval := func(k string) string { // payload value as string
+		if v, ok := ev.Payload[k]; ok {
+			return fmt.Sprint(v)
+		}
+		return ""
+	}
+	num := func(s string) string { // tidy numeric (≤4 decimals)
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return s
+		}
+		return strconv.FormatFloat(f, 'f', 4, 64)
+	}
+	pct := func(k string) string { // signed percentage, 1 decimal
+		f, err := strconv.ParseFloat(sval(k), 64)
+		if err != nil {
+			return sval(k)
+		}
+		sign := ""
+		if f >= 0 {
+			sign = "+"
+		}
+		return sign + strconv.FormatFloat(f, 'f', 1, 64)
+	}
+	fieldLabel := func(f string) string {
+		switch f {
+		case "input_usd_per_1m":
+			return "输入价"
+		case "output_usd_per_1m":
+			return "输出价"
+		case "native_ratio":
+			return "原生倍率"
+		default:
+			return f
+		}
+	}
+	switch ev.Type {
+	case RuleDeltaPct, RuleDeltaAbs:
+		return fmt.Sprintf("🚨 价格变动 · %s · %s · 规则「%s」\n%s: %s → %s (%s%%)  [%s]",
+			ev.StationID, ev.Model, ev.Rule, fieldLabel(sval("field")), num(sval("old")), num(sval("new")), pct("delta_pct"), ev.Severity)
+	case RuleGroupRatioDeltaPct:
+		return fmt.Sprintf("🚨 分组倍率变动 · %s · 分组 %s · 规则「%s」\n%s → %s (%s%%)  [%s]",
+			ev.StationID, sval("group"), ev.Rule, sval("old"), sval("new"), pct("delta_pct"), ev.Severity)
+	case RuleModelAdded:
+		return fmt.Sprintf("➕ 模型新增 · %s · %s · 规则「%s」  [%s]", ev.StationID, ev.Model, ev.Rule, ev.Severity)
+	case RuleModelRemoved:
+		return fmt.Sprintf("⚠️ 模型下架 · %s · %s · 规则「%s」  [%s]", ev.StationID, ev.Model, ev.Rule, ev.Severity)
+	case RuleProbeMarkupPct:
+		return fmt.Sprintf("🚨 暗中加价 · %s · %s · 规则「%s」\n实测 $%s/M vs 声明 $%s/M (markup %s%%)  [%s]",
+			ev.StationID, ev.Model, ev.Rule, num(sval("measured_usd_per_1m")), num(sval("declared_usd_per_1m")), pct("markup_pct"), ev.Severity)
+	case RuleQuotaBelow:
+		return fmt.Sprintf("🚨 余额不足 · %s · 规则「%s」\n剩余 $%s < 阈值 $%s  [%s]",
+			ev.StationID, ev.Rule, num(sval("remaining_usd")), num(sval("threshold_usd")), ev.Severity)
+	case RuleQuotaDropPct:
+		return fmt.Sprintf("🚨 余额下降 · %s · 规则「%s」\n$%s → $%s (↓%s%%)  [%s]",
+			ev.StationID, ev.Rule, num(sval("prev_usd")), num(sval("remaining_usd")), num(sval("drop_pct")), ev.Severity)
+	case RuleEndpointAuthFail:
+		return fmt.Sprintf("🚨 鉴权失败 · %s · 规则「%s」\n%s  [%s]", ev.StationID, ev.Rule, sval("error"), ev.Severity)
+	case RulePollFailureStreak:
+		return fmt.Sprintf("🚨 连续轮询失败 · %s · 规则「%s」\n连续 %s 次: %s  [%s]",
+			ev.StationID, ev.Rule, sval("streak"), sval("error"), ev.Severity)
+	default:
+		return fmt.Sprintf("[%s] %s · %s · %s  [%s]", ev.Rule, ev.Type, ev.StationID, ev.Model, ev.Severity)
+	}
+}
+
+// num is a tidy numeric formatter (unused outside FormatEvent after refactor).
+// Kept for reference; FormatEvent uses its own closure.
 
 func abs(f float64) float64 {
 	if f < 0 {
@@ -211,7 +290,19 @@ func (w *WebhookNotifier) Send(ctx context.Context, ev AlertEvent) error {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	body, err := json.Marshal(ev.Payload)
+	// Augment the payload with a rendered message so webhook consumers get the
+	// same human-readable body as the chat notifiers.
+	payload := ev.Payload
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if ev.Message != "" {
+		payload["message"] = ev.Message
+	}
+	payload["rule"] = ev.Rule
+	payload["station_id"] = ev.StationID
+	payload["severity"] = ev.Severity
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -273,8 +364,11 @@ func (d *DingTalkNotifier) Send(ctx context.Context, ev AlertEvent) error {
 	u.RawQuery = q.Encode()
 
 	title := fmt.Sprintf("TransitMonitor %s: %s", ev.Severity, ev.Rule)
-	text := fmt.Sprintf("### %s\n- station: %s\n- model: %s\n- severity: %s\n- payload: `%v`",
-		ev.Rule, ev.StationID, ev.Model, ev.Severity, ev.Payload)
+	text := ev.Message
+	if text == "" {
+		text = fmt.Sprintf("### %s\n- station: %s\n- model: %s\n- severity: %s\n- payload: `%v`",
+			ev.Rule, ev.StationID, ev.Model, ev.Severity, ev.Payload)
+	}
 	body, _ := json.Marshal(map[string]any{
 		"msgtype":  "markdown",
 		"markdown": map[string]string{"title": title, "text": text},
@@ -322,7 +416,10 @@ func (l *LarkNotifier) SetClock(f func() time.Time) { l.now = f }
 
 func (l *LarkNotifier) Send(ctx context.Context, ev AlertEvent) error {
 	ts := l.now().Unix()
-	text := fmt.Sprintf("[%s] %s\nstation: %s\nmodel: %s\npayload: %v", ev.Severity, ev.Rule, ev.StationID, ev.Model, ev.Payload)
+	text := ev.Message
+	if text == "" {
+		text = fmt.Sprintf("[%s] %s\nstation: %s\nmodel: %s\npayload: %v", ev.Severity, ev.Rule, ev.StationID, ev.Model, ev.Payload)
+	}
 	body := map[string]any{"msg_type": "text", "content": map[string]string{"text": text}}
 	if l.Secret != "" {
 		body["timestamp"] = strconv.FormatInt(ts, 10)
@@ -353,7 +450,10 @@ func (s *SlackNotifier) Send(ctx context.Context, ev AlertEvent) error {
 	if c == nil {
 		c = http.DefaultClient
 	}
-	text := fmt.Sprintf("[%s] %s — station: %s, model: %s", ev.Severity, ev.Rule, ev.StationID, ev.Model)
+	text := ev.Message
+	if text == "" {
+		text = fmt.Sprintf("[%s] %s — station: %s, model: %s", ev.Severity, ev.Rule, ev.StationID, ev.Model)
+	}
 	b, _ := json.Marshal(map[string]string{"text": text})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.WebhookURL, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
@@ -512,7 +612,10 @@ func (q *QQNotifier) Send(ctx context.Context, ev AlertEvent) error {
 	if c == nil {
 		c = http.DefaultClient
 	}
-	text := fmt.Sprintf("[%s] %s\nstation: %s\nmodel: %s\npayload: %v", ev.Severity, ev.Rule, ev.StationID, ev.Model, ev.Payload)
+	text := ev.Message
+	if text == "" {
+		text = fmt.Sprintf("[%s] %s\nstation: %s\nmodel: %s\npayload: %v", ev.Severity, ev.Rule, ev.StationID, ev.Model, ev.Payload)
+	}
 	return q.postMessage(ctx, c, text, true)
 }
 
