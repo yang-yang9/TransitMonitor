@@ -528,7 +528,11 @@ func (s *Store) DeleteStationGroupConfig(ctx context.Context, stationID, groupNa
 func (s *Store) InsertSnapshot(ctx context.Context, snap domain.RawSnapshot) error {
 	capsJSON := ""
 	if len(snap.GroupRatios) > 0 {
-		if b, err := json.Marshal(map[string]any{"group_ratios": snap.GroupRatios}); err == nil {
+		payload := map[string]any{"group_ratios": snap.GroupRatios}
+		if len(snap.GroupRateDefaults) > 0 {
+			payload["group_rate_defaults"] = snap.GroupRateDefaults
+		}
+		if b, err := json.Marshal(payload); err == nil {
 			capsJSON = string(b)
 		}
 	}
@@ -556,6 +560,26 @@ func (s *Store) LatestGroupRatios(ctx context.Context, stationID string) (map[st
 		return nil, err
 	}
 	return caps.GroupRatios, nil
+}
+
+// LatestGroupRateDefaults returns the most recently stored group_rate_defaults
+// (each group's pre-override default rate). Empty/nil when the station's source
+// exposes no per-user overrides. Used by the UI to badge overridden rates.
+func (s *Store) LatestGroupRateDefaults(ctx context.Context, stationID string) (map[string]float64, error) {
+	var capsJSON string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT capabilities FROM snapshots WHERE station_id=? AND capabilities != '' ORDER BY observed_at DESC LIMIT 1`,
+		stationID).Scan(&capsJSON)
+	if err != nil {
+		return nil, err
+	}
+	var caps struct {
+		GroupRateDefaults map[string]float64 `json:"group_rate_defaults"`
+	}
+	if err := json.Unmarshal([]byte(capsJSON), &caps); err != nil {
+		return nil, err
+	}
+	return caps.GroupRateDefaults, nil
 }
 
 // PrevGroupRatios returns the most recent group_ratios stored BEFORE `before`

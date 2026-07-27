@@ -396,6 +396,14 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 				}
 				if len(out) > 0 {
 					snap.GroupRatios = out
+					// Snapshot the defaults (pre-override) into a separate map so
+					// the per-user overrides below can replace GroupRatios entries
+					// while the original default survives for the UI to badge.
+					defaults := make(map[string]float64, len(out))
+					for k, v := range out {
+						defaults[k] = v
+					}
+					snap.GroupRateDefaults = defaults
 				}
 				// Per-user overrides from /api/v1/groups/rates (user JWT). These
 				// win over the group defaults above so the dashboard reflects the

@@ -15,7 +15,7 @@ func TestPartitionGroups(t *testing.T) {
 		{StationID: "s1", GroupName: "pro", Visible: false, SortOrder: 0},
 		{StationID: "s1", GroupName: "trial", Visible: false, SortOrder: 1},
 	}
-	got := PartitionGroups(ratios, cfgs)
+	got := PartitionGroups(ratios, nil, cfgs)
 
 	// visible block first (by sort_order), then hidden block (by sort_order),
 	// unconfigured (default, internal) default to visible and land among the
@@ -43,7 +43,7 @@ func TestPartitionGroups(t *testing.T) {
 
 func TestPartitionGroupsEmptyConfigDefaultsVisible(t *testing.T) {
 	ratios := map[string]float64{"a": 1.0, "b": 2.0}
-	got := PartitionGroups(ratios, nil)
+	got := PartitionGroups(ratios, nil, nil)
 	for _, g := range got {
 		if !g.Visible {
 			t.Errorf("group %s: unconfigured should default visible=true", g.Name)
@@ -62,8 +62,27 @@ func TestPartitionGroupsDuplicateSortOrderStableByName(t *testing.T) {
 		{GroupName: "b", Visible: true, SortOrder: 5},
 		{GroupName: "c", Visible: true, SortOrder: 5},
 	}
-	got := PartitionGroups(ratios, cfgs)
+	got := PartitionGroups(ratios, nil, cfgs)
 	if got[0].Name != "a" || got[1].Name != "b" || got[2].Name != "c" {
 		t.Errorf("duplicate sort_order should tie-break by name: %+v", got)
+	}
+}
+
+// TestPartitionGroupsOverrideBadge: when a group's ratio differs from its
+// recorded default (per-user override), PartitionGroups must set Overridden +
+// Default so the UI can badge it; groups matching their default stay unbadged.
+func TestPartitionGroupsOverrideBadge(t *testing.T) {
+	ratios := map[string]float64{"kiro-低缓": 0.145, "kiro-高缓": 0.18}
+	defaults := map[string]float64{"kiro-低缓": 0.15, "kiro-高缓": 0.18}
+	got := PartitionGroups(ratios, defaults, nil)
+	byName := map[string]GroupDisplay{}
+	for _, g := range got {
+		byName[g.Name] = g
+	}
+	if !byName["kiro-低缓"].Overridden || byName["kiro-低缓"].Default != 0.15 {
+		t.Errorf("kiro-低缓: want Overridden=true Default=0.15, got %+v", byName["kiro-低缓"])
+	}
+	if byName["kiro-高缓"].Overridden {
+		t.Errorf("kiro-高缓: rate matches default, want Overridden=false, got %+v", byName["kiro-高缓"])
 	}
 }

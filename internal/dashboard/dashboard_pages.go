@@ -428,12 +428,14 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode st
 	type stGR struct {
 		name   string
 		gr     map[string]float64
+		defs   map[string]float64
 		hidden map[string]bool
 	}
 	rows := make([]stGR, len(sts))
 	groupSet := map[string]bool{}
 	for i, st := range sts {
 		gr, _ := s.store.LatestGroupRatios(context.Background(), st.ID)
+		defs, _ := s.store.LatestGroupRateDefaults(context.Background(), st.ID)
 		cfgs, _ := s.store.GetStationGroupConfigs(context.Background(), st.ID)
 		hidden := map[string]bool{}
 		for _, c := range cfgs {
@@ -441,7 +443,7 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode st
 				hidden[c.GroupName] = true
 			}
 		}
-		rows[i] = stGR{name: st.Name, gr: gr, hidden: hidden}
+		rows[i] = stGR{name: st.Name, gr: gr, defs: defs, hidden: hidden}
 		for g := range gr {
 			if !hidden[g] { // OR-of-visible: row exists iff ≥1 station has it visible
 				groupSet[g] = true
@@ -529,7 +531,12 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode st
 				if !r.hidden[g] {
 					star = `<span class="gstar">★</span>`
 				}
-				row = append(row, fmt.Sprintf(`<span class="gcell %s">%s</span>%s`, groupColorClass(v, lo, hi), fmtRatio(v)+"x", star))
+				gd := domain.GroupDisplay{Ratio: v}
+				if d, has := r.defs[g]; has && d > 0 && d != v {
+					gd.Default = d
+					gd.Overridden = true
+				}
+				row = append(row, fmt.Sprintf(`<span class="gcell %s">%s%s</span>%s`, groupColorClass(v, lo, hi), fmtRatio(v)+"x", overrideMark(lang, gd), star))
 			}
 		}
 		dataRows = append(dataRows, row)

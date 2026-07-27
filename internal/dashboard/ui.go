@@ -126,6 +126,7 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 .gr-bar.b-ok{background:linear-gradient(90deg,#4f46e5,#818cf8);box-shadow:inset 0 1px 0 rgba(255,255,255,.2)}
 .gr-bar.b-warn{background:linear-gradient(90deg,#d97706,#fbbf24);box-shadow:inset 0 1px 0 rgba(255,255,255,.2)}
 .gr-val{font-size:.85rem;font-weight:700;font-variant-numeric:tabular-nums;text-align:right;font-family:var(--mono)}
+.gr-ovr{display:inline-block;margin-left:.2rem;font-size:.7rem;color:var(--muted);cursor:help;vertical-align:baseline}
 .gr-hidden{margin:.4rem 0 0;border:1px dashed var(--border);border-radius:var(--radius-xs);background:var(--bg-1)}
 .gr-hidden>summary{cursor:pointer;padding:.35rem .6rem;font-size:.78rem;color:var(--muted);list-style:none}
 .gr-hidden>summary::before{content:"▸ ";color:var(--muted)}
@@ -659,12 +660,23 @@ func severityBadge(lang, sev string) string {
 	return `<span class="badge ` + cls + `" title="` + esc(sev) + `">` + t(lang, key) + `</span>`
 }
 
+// overrideMark returns an inline "✎" badge when the group's rate is a per-user
+// override of its default rate. Hovering (native title) shows the original
+// default. Empty when the rate is the group default (no override).
+func overrideMark(lang string, g domain.GroupDisplay) string {
+	if !g.Overridden {
+		return ""
+	}
+	return fmt.Sprintf(`<span class="gr-ovr" title="%s">✎</span>`,
+		esc(fmt.Sprintf(t(lang, "grp.override"), fmtRatio(g.Default)+"x")))
+}
+
 // groupRatioChart renders the horizontal bar chart of group ratios in the given
 // order (caller partitions + orders via domain.PartitionGroups). lg=true renders
 // the larger hero variant (station detail); false the compact variant (overview
 // cards). Color is by ratio value: b-cheap (<0.5), b-warn (>1.0), else b-ok.
 // Returns "" when the slice is empty.
-func groupRatioChart(groups []domain.GroupDisplay, lg bool) string {
+func groupRatioChart(lang string, groups []domain.GroupDisplay, lg bool) string {
 	if len(groups) == 0 {
 		return ""
 	}
@@ -694,8 +706,8 @@ func groupRatioChart(groups []domain.GroupDisplay, lg bool) string {
 		b.WriteString(fmt.Sprintf(
 			`<div class="gr-row"><span class="gr-name" title="%s">%s</span>`+
 				`<div class="gr-track"><span class="gr-bar %s" style="width:%.1f%%"></span></div>`+
-				`<span class="gr-val">%s</span></div>`,
-			esc(g.Name), esc(g.Name), bc, pct, fmtRatio(g.Ratio)+"x"))
+				`<span class="gr-val">%s%s</span></div>`,
+			esc(g.Name), esc(g.Name), bc, pct, fmtRatio(g.Ratio)+"x", overrideMark(lang, g)))
 	}
 	b.WriteString(`</div>`)
 	return b.String()
@@ -722,8 +734,8 @@ func renderHiddenGroupsExpander(lang string, hidden []domain.GroupDisplay) strin
 		b.WriteString(fmt.Sprintf(
 			`<div class="gr-row gr-dim"><span class="gr-name" title="%s">%s</span>`+
 				`<div class="gr-track"><span class="gr-bar %s" style="width:100%%"></span></div>`+
-				`<span class="gr-val">%s</span></div>`,
-			esc(g.Name), esc(g.Name), bc, fmtRatio(g.Ratio)+"x"))
+				`<span class="gr-val">%s%s</span></div>`,
+			esc(g.Name), esc(g.Name), bc, fmtRatio(g.Ratio)+"x", overrideMark(lang, g)))
 	}
 	b.WriteString(`</div></details>`)
 	return b.String()

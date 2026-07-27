@@ -161,8 +161,9 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// group ratios (loaded early so the ratios table can show per-row group_ratio)
 	groupRatios, _ := s.store.LatestGroupRatios(ctx, id)
+	groupDefaults, _ := s.store.LatestGroupRateDefaults(ctx, id)
 	stGroupCfgs, _ := s.store.GetStationGroupConfigs(ctx, id)
-	groupDisplay := domain.PartitionGroups(groupRatios, stGroupCfgs)
+	groupDisplay := domain.PartitionGroups(groupRatios, groupDefaults, stGroupCfgs)
 	displayByName := map[string]domain.GroupDisplay{}
 	for _, d := range groupDisplay {
 		displayByName[d.Name] = d
@@ -252,7 +253,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 		uptime = fmt.Sprintf("%d errors", pollErrs)
 	}
 	// HERO: large group-ratio bar chart.
-	heroChart := groupRatioChart(groupDisplay, true)
+	heroChart := groupRatioChart(lang, groupDisplay, true)
 	// Balance section: latest reading + trend sparkline (only if the station
 	// exposes a balance source).
 	balanceHTML := ""
