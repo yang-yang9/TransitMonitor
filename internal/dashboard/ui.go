@@ -103,7 +103,7 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 .grid.grid-compact{grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:.8rem}
 .grid.grid-compact .stcard{padding:.85rem .9rem;gap:.4rem}
 .grid.grid-compact .stcard .st-name{font-size:.92rem}
-.grid.grid-compact .stcard .meta{display:none}
+.grid.grid-compact .stcard .meta:not(.change-hints){display:none}
 .grid.grid-compact .change-hints{font-size:.72rem}
 
 /* ── station KPI cards ── */
