@@ -245,6 +245,8 @@ tbody tr:hover{background:var(--row)}
 .drag-handle:hover{opacity:1}
 tr.dragging{opacity:.4;outline:2px dashed var(--primary);outline-offset:-2px}
 tr.drag-over{box-shadow:0 -2px 0 var(--primary) inset}
+tr.drag-over-above td{border-top:2px solid var(--primary)!important}
+tr.drag-over-below td{border-bottom:2px solid var(--primary)!important}
 .field-sel{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;margin:.6rem 0 1.1rem;padding:.65rem .9rem;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--primary);border-radius:var(--radius);box-shadow:var(--shadow)}
 .field-sel .cur-field{font-weight:700;color:var(--primary)}
 .matrix-bar{gap:.5rem .7rem}

@@ -117,6 +117,11 @@ func TestStationGroupSettingsSaveAndRender(t *testing.T) {
 	if !strings.Contains(html, "if(window.tmMarkDirty)window.tmMarkDirty()") {
 		t.Errorf("drag-reorder handler must call tmMarkDirty on dragstart:\n%s", html)
 	}
+	// drag-drop must show an explicit above/below indicator so the drop position
+	// is visible before release (not a single whole-row highlight).
+	if !strings.Contains(html, "drag-over-above") || !strings.Contains(html, "drag-over-below") {
+		t.Errorf("drag-over above/below indicator missing:\n%s", html)
+	}
 }
 
 func TestMatrixHidesGroupsHiddenEverywhere(t *testing.T) {
