@@ -358,6 +358,7 @@ button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .rule-fields{display:grid;grid-template-columns:1.5fr 1.5fr .7fr 1fr .5fr auto;gap:.7rem;align-items:end}
 .rule-f-del{display:flex;align-items:end}
 .rule-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem}
+.dir-na{align-self:center;color:var(--muted);font-size:.85rem}
 .toggle{position:relative;display:inline-block;width:40px;height:22px}
 .toggle input{opacity:0;width:0;height:0}
 .toggle-slider{position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:22px;transition:.2s}

@@ -202,7 +202,7 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 			}
 			b.w(`<option value="` + o.val + `"` + sel + `>` + esc(o.label) + `</option>`)
 		}
-		b.w(`</select></div>`)
+		b.w(`</select><span class="dir-na">— 不适用</span></div>`)
 		// enabled toggle
 		b.w(`<div class="field rule-f-en"><span class="field-label">` + t(lang, "form.rule.enabled") + `</span>`)
 		b.w(`<label class="toggle"><input class="r-enabled" type="checkbox"` + chk + `><span class="toggle-slider"></span></label></div>`)
@@ -251,16 +251,21 @@ var _dirOpts=` + dirOptsJS + `;
 var _dirTypes={'delta_pct':1,'delta_abs':1,'probe_markup_pct':1,'group_ratio_delta_pct':1,'quota_drop_pct':1};
 function tmOnTypeChange(sel){
   var card=sel.closest('.rule-card');
-  var dirSel=card.querySelector('.r-direction');
   var dirField=card.querySelector('.rule-f-dir');
-  if(!dirSel)return;
+  if(!dirField)return;
+  var dirSel=card.querySelector('.r-direction');
+  var csel=dirField.querySelector('.csel');        // custom dropdown wrapper (built by global init)
+  var ph=dirField.querySelector('.dir-na');        // "— 不适用" placeholder
   if(_dirTypes[sel.value]){
-    dirSel.disabled=false;
+    if(dirSel)dirSel.disabled=false;
+    if(csel)csel.style.display='';else if(dirSel)dirSel.style.display='';
+    if(ph)ph.style.display='none';
     dirField.style.opacity='1';
   }else{
-    dirSel.value='both';
-    dirSel.disabled=true;
-    dirField.style.opacity='.4';
+    if(dirSel){dirSel.value='both';dirSel.disabled=true;dirSel.style.display='none';}
+    if(csel)csel.style.display='none';
+    if(ph)ph.style.display='';
+    dirField.style.opacity='.5';
   }
 }
 function tmAddRule(){
@@ -270,7 +275,7 @@ function tmAddRule(){
     +'<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") + `</span><input class="r-name"></div>'
     +'<div class="field rule-f-type"><span class="field-label">` + t(lang, "form.rule.type") + `</span><select class="r-type" onchange="tmOnTypeChange(this)">'+_typeOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></div>'
     +'<div class="field rule-f-thr"><span class="field-label">` + t(lang, "form.rule.threshold") + `</span><input class="r-threshold" type="number" step="any" min="0" value="5"></div>'
-    +'<div class="field rule-f-dir"><span class="field-label">` + t(lang, "form.rule.direction") + `</span><select class="r-direction">'+_dirOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></div>'
+    +'<div class="field rule-f-dir"><span class="field-label">` + t(lang, "form.rule.direction") + `</span><select class="r-direction">'+_dirOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select><span class="dir-na">— 不适用</span></div>'
     +'<div class="field rule-f-en"><span class="field-label">` + t(lang, "form.rule.enabled") + `</span><label class="toggle"><input class="r-enabled" type="checkbox" checked><span class="toggle-slider"></span></label></div>'
     +'<div class="field rule-f-del"><span class="field-label">&nbsp;</span><button type="button" class="btn btn-sm btn-danger" onclick="this.closest(\'.rule-card\').remove()">` + delLabel + `</button></div>'
     +'</div>';
@@ -304,7 +309,10 @@ function tmResetRules(){
     .catch(function(e){ alert(e); });
 }
 // Set initial direction-field state for existing rows (disable for non-directional types).
-document.querySelectorAll('#rules-body .r-type').forEach(function(s){tmOnTypeChange(s);});
+// Wrapped in DOMContentLoaded so the global custom-select (.csel) widget is built first.
+document.addEventListener('DOMContentLoaded',function(){
+  document.querySelectorAll('#rules-body .r-type').forEach(function(s){tmOnTypeChange(s);});
+});
 </script>`)
 }
 
