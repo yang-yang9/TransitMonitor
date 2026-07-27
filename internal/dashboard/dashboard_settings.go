@@ -180,7 +180,7 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 		b.w(`<input class="r-name" value="` + esc(r.Name) + `"></div>`)
 		// type
 		b.w(`<div class="field rule-f-type"><span class="field-label">` + t(lang, "form.rule.type") + `</span>`)
-		b.w(`<select class="r-type">`)
+		b.w(`<select class="r-type" onchange="tmOnTypeChange(this)">`)
 		for _, o := range typeOptions {
 			sel := ""
 			if o.val == r.Type {
@@ -247,18 +247,35 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 	b.w(`<script>
 var _typeOpts=` + typeOptsJS + `;
 var _dirOpts=` + dirOptsJS + `;
+// Rule types that carry a signed delta → direction (up/down) is meaningful.
+var _dirTypes={'delta_pct':1,'delta_abs':1,'probe_markup_pct':1,'group_ratio_delta_pct':1,'quota_drop_pct':1};
+function tmOnTypeChange(sel){
+  var card=sel.closest('.rule-card');
+  var dirSel=card.querySelector('.r-direction');
+  var dirField=card.querySelector('.rule-f-dir');
+  if(!dirSel)return;
+  if(_dirTypes[sel.value]){
+    dirSel.disabled=false;
+    dirField.style.opacity='1';
+  }else{
+    dirSel.value='both';
+    dirSel.disabled=true;
+    dirField.style.opacity='.4';
+  }
+}
 function tmAddRule(){
   var body=document.getElementById('rules-body');
   var card=document.createElement('div');card.className='rule-card card';
   card.innerHTML='<div class="rule-fields">'
     +'<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") + `</span><input class="r-name"></div>'
-    +'<div class="field rule-f-type"><span class="field-label">` + t(lang, "form.rule.type") + `</span><select class="r-type">'+_typeOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></div>'
+    +'<div class="field rule-f-type"><span class="field-label">` + t(lang, "form.rule.type") + `</span><select class="r-type" onchange="tmOnTypeChange(this)">'+_typeOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></div>'
     +'<div class="field rule-f-thr"><span class="field-label">` + t(lang, "form.rule.threshold") + `</span><input class="r-threshold" type="number" step="any" min="0" value="5"></div>'
     +'<div class="field rule-f-dir"><span class="field-label">` + t(lang, "form.rule.direction") + `</span><select class="r-direction">'+_dirOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></div>'
     +'<div class="field rule-f-en"><span class="field-label">` + t(lang, "form.rule.enabled") + `</span><label class="toggle"><input class="r-enabled" type="checkbox" checked><span class="toggle-slider"></span></label></div>'
     +'<div class="field rule-f-del"><span class="field-label">&nbsp;</span><button type="button" class="btn btn-sm btn-danger" onclick="this.closest(\'.rule-card\').remove()">` + delLabel + `</button></div>'
     +'</div>';
   body.appendChild(card);
+  tmOnTypeChange(card.querySelector('.r-type'));
 }
 function tmCollectRules(){
   var cards=document.querySelectorAll('#rules-body .rule-card');
@@ -286,6 +303,8 @@ function tmResetRules(){
     .then(function(r){ if(r.ok){ alert(` + jsQuote(t(lang, "settings.rules.reset")) + `); location.reload(); } else { r.text().then(function(t){ alert(t); }); } })
     .catch(function(e){ alert(e); });
 }
+// Set initial direction-field state for existing rows (disable for non-directional types).
+document.querySelectorAll('#rules-body .r-type').forEach(function(s){tmOnTypeChange(s);});
 </script>`)
 }
 
