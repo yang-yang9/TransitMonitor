@@ -81,6 +81,10 @@ nav a.active{color:#fff;font-weight:600;background:rgba(255,255,255,.08);border-
 
 /* ── main ── */
 main{max-width:1200px;margin:0 auto;padding:2rem 1.4rem 4rem}
+/* widen the canvas only on the overview page so more station cards fit per
+   row; other pages (matrix/audit/stations) share main and keep 1200px so
+   their table line lengths stay readable. */
+body.page-overview main{max-width:1600px}
 h1{font-size:1.65rem;margin:0 0 .25rem;font-weight:800;letter-spacing:-.02em;color:var(--ink)}
 h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;padding-left:.65rem;border-left:3px solid var(--primary);line-height:1.3}
 .sub{color:var(--muted);margin:0 0 1.5rem;font-size:.88rem;line-height:1.7;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
@@ -92,6 +96,15 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 [data-theme="dark"] .card{background:linear-gradient(180deg,var(--card),rgba(15,23,42,.6))}
 .card h2{margin:.1rem 0 .7rem;font-size:1.05rem;border:none;padding-left:0}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:1.1rem}
+/* compact overview mode (toggle on): narrower cards + pill ratios → ~5-6/row
+   on 1440px, ~6-7/row on 1920px. 230px (not 210px) keeps the 768-1024px tablet
+   band from rendering 3-4 cramped columns; the 768px single-col fallback still
+   applies. minmax(300px) above is the detailed-bars default. */
+.grid.grid-compact{grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:.8rem}
+.grid.grid-compact .stcard{padding:.85rem .9rem;gap:.4rem}
+.grid.grid-compact .stcard .st-name{font-size:.92rem}
+.grid.grid-compact .stcard .meta{font-size:.76rem;line-height:1.5}
+.grid.grid-compact .change-hints{font-size:.72rem}
 
 /* ── station KPI cards ── */
 .stcard{display:flex;flex-direction:column;gap:.5rem;cursor:pointer;text-decoration:none;color:inherit;border-left-color:var(--ok)}
@@ -107,8 +120,8 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 .ch-val{white-space:nowrap;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:.75rem}
 .ch-old{color:var(--muted);opacity:.65}
 .ch-ts{font-size:.65rem;color:var(--muted);opacity:.55;white-space:nowrap;margin-left:.4rem;min-width:2rem;text-align:right}
-.gr-preview{display:flex;flex-wrap:wrap;gap:.3rem;margin:.15rem 0 .25rem}
-.badge-sm{display:inline-flex;align-items:center;gap:.15rem;font-size:.7rem;padding:.12rem .4rem;border-radius:5px;background:var(--bg-2);border:1px solid var(--border);color:var(--ink2);font-variant-numeric:tabular-nums;font-family:var(--mono)}
+.gr-preview{display:flex;flex-wrap:wrap;gap:.25rem;margin:.1rem 0 .2rem}
+.badge-sm{display:inline-flex;align-items:center;gap:.15rem;font-size:.68rem;padding:.1rem .38rem;border-radius:5px;background:var(--bg-2);border:1px solid var(--border);color:var(--ink2);font-variant-numeric:tabular-nums;font-family:var(--mono)}
 .badge-sm.b-cheap{color:#059669;border-color:#6ee7b7;background:rgba(5,150,105,.08)}
 .badge-sm.b-warn{color:#d97706;border-color:#fcd34d;background:rgba(217,119,6,.08)}
 .badge-sm.b-ok{color:var(--ink2)}
@@ -412,14 +425,23 @@ func pageShell(lang, title, active, body string, showLogout bool) string {
 	if showLogout {
 		logoutBtn = `<button class="icon-btn" onclick="tmLogout()" title="` + t(lang, "logout") + `">⏻</button>`
 	}
-	tools := fmt.Sprintf(`<div class="tools"><button class="auto-btn" id="tm-autorefresh" onclick="tmToggleAuto()" title="Auto-refresh">🔄 <span id="tm-ar-label">60s</span></button>`+
+	viewBtn := ""
+	if active == "overview" {
+		viewBtn = `<button class="auto-btn" id="tm-view" onclick="tmToggleView()" title="` + t(lang, "view.toggle") + `">⊞ <span id="tm-view-label">` + t(lang, "view.compact") + `</span></button>`
+	}
+	tools := fmt.Sprintf(`<div class="tools">%s<button class="auto-btn" id="tm-autorefresh" onclick="tmToggleAuto()" title="Auto-refresh">🔄 <span id="tm-ar-label">60s</span></button>`+
 		`<button class="icon-btn" id="tm-theme" onclick="tmToggleTheme()" title="%s">🌙</button>`+
-		`<button class="lang-btn" onclick="tmSetLang('%s')">%s</button>%s</div>`, t(lang, "theme"), other, otherLabel, logoutBtn)
+		`<button class="lang-btn" onclick="tmSetLang('%s')">%s</button>%s</div>`, viewBtn, t(lang, "theme"), other, otherLabel, logoutBtn)
 	js := `<script>(function(){var d=document.documentElement,s=localStorage.getItem('tm-theme');` +
 		`if(s==='dark'||s==='light'){d.dataset.theme=s;}function syncTheme(){var b=document.getElementById('tm-theme');if(b)b.textContent=d.dataset.theme==='dark'?'☀️':'🌙';}syncTheme();` +
 		`window.tmToggleTheme=function(){var n=(d.dataset.theme==='dark')?'light':'dark';d.dataset.theme=n;localStorage.setItem('tm-theme',n);syncTheme();};` +
 		`window.tmSetLang=function(l){document.cookie='tm-lang='+l+';path=/;max-age=2592000';location.reload();};` +
 		`var ar=localStorage.getItem('tm-autorefresh');if(ar===null)ar='1';function syncAuto(){var b=document.getElementById('tm-autorefresh'),l=document.getElementById('tm-ar-label');if(b){b.classList.toggle('on',ar==='1');if(l)l.textContent=ar==='1'?'60s':'OFF';}}syncAuto();` +
+		// overview density toggle: cookie (not localStorage) so the SERVER sees
+		// the mode at render time and picks groupRatioPills vs groupRatioChart
+		// (mirrors the tm-lang cookie pattern). Default compact = pill strip.
+		`var vm=(document.cookie.match(/(?:^|; )tm-overview=([^;]+)/)||[])[1]||'compact';function syncView(){var b=document.getElementById('tm-view'),l=document.getElementById('tm-view-label');if(b){b.classList.toggle('on',vm==='compact');if(l)l.textContent=vm==='compact'?'` + t(lang, "view.compact") + `':'` + t(lang, "view.detail") + `';}}syncView();` +
+		`window.tmToggleView=function(){var n=vm==='compact'?'detail':'compact';document.cookie='tm-overview='+n+';path=/;max-age=2592000';location.reload();};` +
 		`window.tmSwapMain=function(html){var doc=new DOMParser().parseFromString(html,'text/html');var nm=doc.querySelector('main');if(!nm)return false;var m=document.querySelector('main');if(!m)return false;var sx=window.scrollX,sy=window.scrollY;m.replaceWith(nm);/* scripts that come back via DOM parsing don't auto-execute, so re-run inline page scripts (drag-reorder, form handlers) inside the swapped <main> */nm.querySelectorAll('script').forEach(function(old){var s=document.createElement('script');if(old.src){s.src=old.src;}else{s.textContent=old.textContent;}old.replaceWith(s);});if(window.tmInitSelects)window.tmInitSelects();window.scrollTo(sx,sy);nm.style.opacity='0';nm.style.transition='opacity .15s';requestAnimationFrame(function(){requestAnimationFrame(function(){nm.style.opacity='1';});});return true;};` +
 		`window.tmRefreshPartial=function(){return fetch(location.href,{credentials:'same-origin',cache:'no-store'}).then(function(r){/* 302 to /login (session expired) or any non-200 → fall back to a hard reload, which will then redirect to login */if(!r.ok||r.redirected){throw new Error('reload');}return r.text();}).then(function(t){if(!window.tmSwapMain(t))throw new Error('no main');});};` +
 		`if(ar==='1'){var tmDirty=false;window.tmMarkDirty=function(){tmDirty=true;};document.addEventListener('input',function(){tmDirty=true;},true);document.addEventListener('change',function(){tmDirty=true;},true);/* skip refresh once the user has edited a field (incl. drag-reorder), so unsaved edits aren't wiped; reschedule so it keeps ticking instead of doing a one-shot full reload */function tmSched(){setTimeout(function(){if(tmDirty){tmSched();return;}window.tmRefreshPartial().then(tmSched).catch(function(){location.reload();});},60000);}tmSched();}` +
@@ -455,7 +477,7 @@ func pageShell(lang, title, active, body string, showLogout bool) string {
 		`<div id="tm-tip"></div>`
 	favicon := `<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314b8a6'/%3E%3Ctext x='16' y='23' font-size='16' font-weight='bold' fill='white' text-anchor='middle' font-family='sans-serif'%3ETM%3C/text%3E%3C/svg%3E">`
 	return fmt.Sprintf(`<!doctype html><html lang="%s"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">%s<title>%s · TransitMonitor</title><style>%s</style></head>`+
-		`<body><header class="top"><div class="top-row">`+
+		`<body class="page-%s"><header class="top"><div class="top-row">`+
 		`<div class="brand"><span class="logo">TM</span>TransitMonitor</div>`+
 		`<button class="ham" onclick="tmHam()" aria-label="menu">☰</button>`+
 		`<nav id="tm-nav">%s</nav>%s</div></header>`+
@@ -466,7 +488,7 @@ func pageShell(lang, title, active, body string, showLogout bool) string {
 		`<a href="/metrics">/metrics</a>`+
 		`<a href="/healthz">/healthz</a>`+
 		`</div></footer>%s%s</body></html>`,
-		lang, favicon, html.EscapeString(title), appCSS, n.String(), tools, body, modalHTML, js)
+		lang, favicon, html.EscapeString(title), appCSS, active, n.String(), tools, body, modalHTML, js)
 }
 
 func (s *Server) writeHTMLShell(w http.ResponseWriter, lang, title, active, body string) {
@@ -721,6 +743,34 @@ func groupRatioChart(lang string, groups []domain.GroupDisplay, lg bool) string 
 				`<div class="gr-track"><span class="gr-bar %s" style="width:%.1f%%"></span></div>`+
 				`<span class="gr-val">%s%s</span></div>`,
 			esc(g.Name), esc(g.Name), bc, pct, fmtRatio(g.Ratio)+"x", overrideMark(lang, g)))
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// groupRatioPills renders the overview card's compact color-coded ratio pill
+// strip, reusing the already-defined .gr-preview + .badge-sm + b-cheap/b-warn/
+// b-ok color scale. One pill per visible group prints "name <b>0.8x</b>" plus
+// the ✎ override mark — every group's ratio stays fully visible, only denser
+// than the one-row-per-group bar chart (groupRatioChart). Color mirrors that
+// chart (ratio<0.5 b-cheap, >1.0 b-warn, else b-ok) so semantics match. Returns
+// "" for an empty slice. The full bar chart remains on the station detail page.
+func groupRatioPills(lang string, groups []domain.GroupDisplay) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="gr-preview">`)
+	for _, g := range groups {
+		bc := "b-ok"
+		if g.Ratio < 0.5 {
+			bc = "b-cheap"
+		} else if g.Ratio > 1.0 {
+			bc = "b-warn"
+		}
+		b.WriteString(fmt.Sprintf(
+			`<span class="badge-sm %s" title="%s">%s <b>%s</b>%s</span>`,
+			bc, esc(g.Name), esc(g.Name), fmtRatio(g.Ratio)+"x", overrideMark(lang, g)))
 	}
 	b.WriteString(`</div>`)
 	return b.String()

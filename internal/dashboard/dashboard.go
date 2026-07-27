@@ -481,7 +481,18 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf(t(lang, "banner.decrypt_failed"), df) +
 			` <a class="btn btn-sm btn-outline" href="/stations">` + t(lang, "title.stations") + `</a></div>`)
 	}
-	b.WriteString(`<h2>` + t(lang, "section.stations") + `</h2><div class="grid">`)
+	// Overview density mode: cookie tm-overview (mirrors tm-lang) lets the
+	// server pick the chart variant at render time. Default "compact" = pill
+	// strip (denser, ~5-6 cards/row); "detail" = per-group bar chart (legacy).
+	view := "compact"
+	if c, err := r.Cookie("tm-overview"); err == nil && c.Value == "detail" {
+		view = "detail"
+	}
+	gridCls := ""
+	if view == "compact" {
+		gridCls = " grid-compact"
+	}
+	b.WriteString(`<h2>` + t(lang, "section.stations") + `</h2><div class="grid` + gridCls + `">`)
 	for _, st := range s.stationsList() {
 		obs, _ := s.store.LatestRatioObservations(ctx, st.ID)
 		n := len(obs)
@@ -507,7 +518,10 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 		grd, _ := s.store.LatestGroupRateDefaults(ctx, st.ID)
 		cfgs, _ := s.store.GetStationGroupConfigs(ctx, st.ID)
 		visible, hidden := domain.SplitVisible(domain.PartitionGroups(grs, grd, cfgs))
-		chart := groupRatioChart(lang, visible, false) + renderHiddenGroupsExpander(lang, hidden)
+		chart := groupRatioPills(lang, visible) + renderHiddenGroupsExpander(lang, hidden)
+		if view == "detail" {
+			chart = groupRatioChart(lang, visible, false) + renderHiddenGroupsExpander(lang, hidden)
+		}
 		// recent group-ratio change hints (multi, sorted by group display order)
 		changeHint := ""
 		if evs, _ := s.store.ListChangeEvents(ctx, st.ID, 20); len(evs) > 0 {
