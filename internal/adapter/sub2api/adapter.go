@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -102,6 +103,35 @@ func (a *Adapter) jwtGet(ctx context.Context, path string) (int, []byte, error) 
 	return a.doGet(ctx, path, a.JWT)
 }
 
+// applyUserGroupRates fetches the monitoring user's per-group rate overrides
+// (GET /api/v1/groups/rates) and overlays them onto snap.GroupRatios by group
+// ID (matched via idToName from /groups/available). An override replaces the
+// group default so the dashboard shows the user's actual effective rate.
+// Best-effort: returns silently on any failure (group defaults remain).
+func (a *Adapter) applyUserGroupRates(ctx context.Context, snap *domain.RawSnapshot, idToName map[int64]string) {
+	status, body, err := a.jwtGet(ctx, "/api/v1/groups/rates")
+	if err != nil || status != http.StatusOK {
+		return
+	}
+	snap.RawPayloads["/api/v1/groups/rates"] = body
+	snap.EndpointsUsed = append(snap.EndpointsUsed, "/api/v1/groups/rates")
+	var ur userGroupRatesResp
+	if json.Unmarshal(body, &ur) != nil || ur.Code != 0 || len(ur.Data) == 0 {
+		return
+	}
+	for idStr, rate := range ur.Data {
+		id, perr := strconv.ParseInt(idStr, 10, 64)
+		if perr != nil {
+			continue
+		}
+		name, ok := idToName[id]
+		if !ok || rate <= 0 {
+			continue
+		}
+		snap.GroupRatios[name] = rate
+	}
+}
+
 func (a *Adapter) nowTime() time.Time {
 	if a.now != nil {
 		return a.now()
@@ -176,12 +206,23 @@ type channelsAvailableResp struct {
 type groupsAvailableResp struct {
 	Code int `json:"code"`
 	Data []struct {
+		ID                 int64   `json:"id"`
 		Name               string  `json:"name"`
 		RateMultiplier     float64 `json:"rate_multiplier"`
 		PeakRateEnabled    bool    `json:"peak_rate_enabled"`
 		PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
 		Status             string  `json:"status"`
 	} `json:"data"`
+}
+
+// userGroupRatesResp is GET /api/v1/groups/rates (user JWT). Returns the
+// monitoring user's per-group rate overrides as map[groupId]rate (groupID keys
+// are JSON strings). These are PERSONAL overrides on top of each group's
+// default rate_multiplier (from /groups/available); they reflect what the
+// monitoring user actually pays per group.
+type userGroupRatesResp struct {
+	Code int                `json:"code"`
+	Data map[string]float64 `json:"data"`
 }
 
 // userProfileResp is GET /api/v1/user/profile (user JWT). Mirrors sub2api's
@@ -344,14 +385,26 @@ func (a *Adapter) FetchRatios(ctx context.Context, caps domain.CapabilityReport)
 			var gr groupsAvailableResp
 			if json.Unmarshal(body, &gr) == nil && len(gr.Data) > 0 {
 				out := make(map[string]float64, len(gr.Data))
+				idToName := make(map[int64]string, len(gr.Data))
 				for _, g := range gr.Data {
 					if g.RateMultiplier > 0 {
 						out[g.Name] = g.RateMultiplier
+					}
+					if g.ID != 0 {
+						idToName[g.ID] = g.Name
 					}
 				}
 				if len(out) > 0 {
 					snap.GroupRatios = out
 				}
+				// Per-user overrides from /api/v1/groups/rates (user JWT). These
+				// win over the group defaults above so the dashboard reflects the
+				// monitoring user's actual effective rate (e.g. a 0.145 personal
+				// override on a 0.15 default group). Best-effort: the endpoint is
+				// behind sub2api's session-binding check (flaky 401 under a
+				// Cloudflare-fronted deployment); jwtGet's reactive re-login
+				// handles the 401s. On failure the group defaults remain.
+				a.applyUserGroupRates(ctx, &snap, idToName)
 			}
 		}
 	}

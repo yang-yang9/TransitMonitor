@@ -556,6 +556,54 @@ func TestGroupsAvailablePopulatesGroupRatios(t *testing.T) {
 	}
 }
 
+// TestUserGroupRatesOverride: /api/v1/groups/rates returns the monitoring
+// user's per-group overrides (keyed by group ID). An override must REPLACE the
+// group default from /groups/available so the dashboard shows the user's actual
+// effective rate (e.g. 0.145 personal override on a 0.15 default group).
+func TestUserGroupRatesOverride(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/sub2api/billing", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, billingResp{EffectiveRateMultiplier: 0.15, GroupRateMultiplier: 0.15})
+	})
+	mux.HandleFunc("/api/v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"code": 0, "data": map[string]string{"access_token": "jwt-1"}})
+	})
+	// groups/available: group defaults, with IDs so the override can match.
+	mux.HandleFunc("/api/v1/groups/available", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer jwt-1" {
+			writeJSON(w, 401, map[string]any{"message": "auth"})
+			return
+		}
+		fmt.Fprint(w, `{"code":0,"data":[{"id":5,"name":"kiro-低缓","rate_multiplier":0.15,"status":"active"},{"id":6,"name":"kiro-高缓","rate_multiplier":0.18,"status":"active"}]}`)
+	})
+	// groups/rates: per-user overrides keyed by group ID (string). kiro-低缓 has
+	// a 0.145 personal override; kiro-高缓 has none (stays at 0.18 default).
+	mux.HandleFunc("/api/v1/groups/rates", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer jwt-1" {
+			writeJSON(w, 401, map[string]any{"message": "auth"})
+			return
+		}
+		fmt.Fprint(w, `{"code":0,"data":{"5":0.145}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a := New("s1", srv.URL, "sk-1", "jwt-1", "", "a@b.com", "pw", "default", srv.Client())
+	caps, _ := a.ProbeCapabilities(context.Background())
+	snap, _, err := a.FetchRatios(context.Background(), caps)
+	if err != nil {
+		t.Fatalf("FetchRatios: %v", err)
+	}
+	// Override applied: kiro-低缓 shows 0.145 (NOT the 0.15 default).
+	if !eq(snap.GroupRatios["kiro-低缓"], 0.145) {
+		t.Errorf("kiro-低缓: want override 0.145 got %v", snap.GroupRatios["kiro-低缓"])
+	}
+	// Group without override keeps its default.
+	if !eq(snap.GroupRatios["kiro-高缓"], 0.18) {
+		t.Errorf("kiro-高缓: want default 0.18 got %v", snap.GroupRatios["kiro-高缓"])
+	}
+}
+
 // TestUserProfilePopulatesBalance: /api/v1/user/profile (user JWT) is the
 // sub2api balance source. balance/frozen_balance are USD and must populate
 // caps.{HasQuota,QuotaRemaining,QuotaUsed} without a QuotaPerUnit conversion.
