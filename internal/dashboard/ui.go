@@ -433,9 +433,10 @@ func pageShell(lang, title, active, body string, showLogout bool) string {
 		`document.getElementById('tm-modal-ok').onclick=function(){o.classList.remove('show');cb();};document.getElementById('tm-modal-cancel').onclick=function(){o.classList.remove('show');};};` +
 		`window.tmLogout=function(){fetch('/api/logout',{method:'POST'}).then(function(){location.href='/login';}).catch(function(){location.href='/login';});};` +
 		`window.tmToggleBatch=function(id,el){var rows=document.querySelectorAll('.batch-extra-'+id);var show=rows[0]&&rows[0].style.display==='none';rows.forEach(function(r){r.style.display=show?'':'none';});el.textContent=show?el.dataset.less:el.dataset.more;};` +
-		// global sparkline tooltip via fixed-position div
-		`var tip=document.getElementById('tm-tip');document.addEventListener('mouseover',function(e){var d=e.target.closest('.spark-dot');if(d&&d.dataset.tip){tip.textContent=d.dataset.tip;var r=d.getBoundingClientRect();tip.style.left=(r.left+r.width/2)+'px';tip.style.top=r.top+'px';tip.classList.add('show');}});` +
-		`document.addEventListener('mouseout',function(e){if(e.target.closest('.spark-dot'))tip.classList.remove('show');});` +
+		// global floating tooltip via fixed-position div; handles both sparkline
+		// dots and per-user-override ✎ badges (any .spark-dot / .gr-ovr with data-tip).
+		`var tip=document.getElementById('tm-tip');var TIP_SEL='.spark-dot, .gr-ovr';document.addEventListener('mouseover',function(e){var d=e.target.closest(TIP_SEL);if(d&&d.dataset.tip){tip.textContent=d.dataset.tip;var r=d.getBoundingClientRect();tip.style.left=(r.left+r.width/2)+'px';tip.style.top=r.top+'px';tip.classList.add('show');}});` +
+		`document.addEventListener('mouseout',function(e){if(e.target.closest(TIP_SEL))tip.classList.remove('show');});` +
 		`})();</script>`
 	modalHTML := `<div class="modal-overlay" id="tm-modal"><div class="modal-box">` +
 		`<h3>` + t(lang, "modal.title") + `</h3><p id="tm-modal-msg"></p>` +
@@ -661,13 +662,15 @@ func severityBadge(lang, sev string) string {
 }
 
 // overrideMark returns an inline "✎" badge when the group's rate is a per-user
-// override of its default rate. Hovering (native title) shows the original
-// default. Empty when the rate is the group default (no override).
+// override of its default rate. Hovering shows the original default rate via the
+// global #tm-tip floating tooltip (data-tip), not the native title, so it appears
+// instantly instead of after the browser's ~1-2s title delay. Empty when the
+// rate is the group default (no override).
 func overrideMark(lang string, g domain.GroupDisplay) string {
 	if !g.Overridden {
 		return ""
 	}
-	return fmt.Sprintf(`<span class="gr-ovr" title="%s">✎</span>`,
+	return fmt.Sprintf(`<span class="gr-ovr" data-tip="%s">✎</span>`,
 		esc(fmt.Sprintf(t(lang, "grp.override"), fmtRatio(g.Default)+"x")))
 }
 
