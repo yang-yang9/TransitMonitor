@@ -344,6 +344,11 @@ func PartitionGroups(ratios map[string]float64, cfgs []StationGroupConfig) []Gro
 		if out[i].Order != out[j].Order {
 			return out[i].Order < out[j].Order
 		}
+		// default tie-break (no saved sort_order): cheapest ratio first, then name
+		// for determinism when ratios are equal.
+		if out[i].Ratio != out[j].Ratio {
+			return out[i].Ratio < out[j].Ratio
+		}
 		return out[i].Name < out[j].Name
 	})
 	return out
