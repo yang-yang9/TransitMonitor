@@ -109,6 +109,14 @@ func TestStationGroupSettingsSaveAndRender(t *testing.T) {
 	if !strings.Contains(html, `name="visible"`) || !strings.Contains(html, "pro") {
 		t.Errorf("per-group checkbox row missing:\n%s", html)
 	}
+	// auto-refresh dirty-guard must be exposed and the drag-reorder handler must
+	// engage it, so a 60s auto-reload doesn't wipe an unsaved drag-reorder.
+	if !strings.Contains(html, "window.tmMarkDirty") {
+		t.Errorf("page shell must expose window.tmMarkDirty dirty-guard:\n%s", html)
+	}
+	if !strings.Contains(html, "if(window.tmMarkDirty)window.tmMarkDirty()") {
+		t.Errorf("drag-reorder handler must call tmMarkDirty on dragstart:\n%s", html)
+	}
 }
 
 func TestMatrixHidesGroupsHiddenEverywhere(t *testing.T) {
