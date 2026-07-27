@@ -854,10 +854,11 @@ func (s *Server) renderGroupSettingsSection(lang string, stationID string, group
 		t(lang, "btn.savegroupconfig") + `</button> <span id="tm-gc-status" class="meta"></span></div>`)
 	b.WriteString(`<script>
 (function(){var tb=document.getElementById('tm-gc-body');if(!tb)return;var drag=null;
+function clearMarkers(){[].forEach.call(tb.querySelectorAll('.drag-over-above,.drag-over-below'),function(r){r.classList.remove('drag-over-above');r.classList.remove('drag-over-below');});}
 tb.addEventListener('dragstart',function(e){var tr=e.target.closest('tr[data-grp]');if(!tr)return;drag=tr;tr.classList.add('dragging');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',tr.dataset.grp);if(window.tmMarkDirty)window.tmMarkDirty();});
-tb.addEventListener('dragend',function(){if(drag)drag.classList.remove('dragging');drag=null;[].forEach.call(tb.querySelectorAll('.drag-over'),function(r){r.classList.remove('drag-over');});});
-tb.addEventListener('dragover',function(e){e.preventDefault();e.dataTransfer.dropEffect='move';var tr=e.target.closest('tr[data-grp]');if(!tr||tr===drag)return;[].forEach.call(tb.querySelectorAll('.drag-over'),function(r){r.classList.remove('drag-over');});tr.classList.add('drag-over');});
-tb.addEventListener('drop',function(e){e.preventDefault();var target=e.target.closest('tr[data-grp]');if(!target||!drag||target===drag)return;var rect=target.getBoundingClientRect();var mid=rect.top+rect.height/2;if(e.clientY<mid){tb.insertBefore(drag,target);}else{tb.insertBefore(drag,target.nextSibling);}});})();
+tb.addEventListener('dragend',function(){if(drag)drag.classList.remove('dragging');drag=null;clearMarkers();});
+tb.addEventListener('dragover',function(e){e.preventDefault();e.dataTransfer.dropEffect='move';var tr=e.target.closest('tr[data-grp]');if(!tr||tr===drag)return;var rect=tr.getBoundingClientRect();var above=e.clientY<rect.top+rect.height/2;clearMarkers();tr.classList.add(above?'drag-over-above':'drag-over-below');});
+tb.addEventListener('drop',function(e){e.preventDefault();var target=e.target.closest('tr[data-grp]');if(!target||!drag||target===drag)return;clearMarkers();var rect=target.getBoundingClientRect();if(e.clientY<rect.top+rect.height/2){tb.insertBefore(drag,target);}else{tb.insertBefore(drag,target.nextSibling);}});})();
 function tmGcSave(id){var rows=document.querySelectorAll('#tm-gc-body tr');
  var gs=[];rows.forEach(function(tr,i){var cb=tr.querySelector('[name=visible]');
  gs.push({group_name:tr.dataset.grp,visible:!!cb.checked,sort_order:i});});
