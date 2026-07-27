@@ -104,7 +104,7 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 .grid.grid-compact .stcard{padding:.85rem .9rem;gap:.4rem}
 .grid.grid-compact .stcard .st-name{font-size:.92rem}
 .grid.grid-compact .stcard .meta{font-size:.76rem;line-height:1.5}
-.grid.grid-compact .change-hints{font-size:.72rem}
+.grid.grid-compact .change-hints{display:none}
 
 /* ── station KPI cards ── */
 .stcard{display:flex;flex-direction:column;gap:.5rem;cursor:pointer;text-decoration:none;color:inherit;border-left-color:var(--ok)}
@@ -120,8 +120,9 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 .ch-val{white-space:nowrap;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:.75rem}
 .ch-old{color:var(--muted);opacity:.65}
 .ch-ts{font-size:.65rem;color:var(--muted);opacity:.55;white-space:nowrap;margin-left:.4rem;min-width:2rem;text-align:right}
-.gr-preview{display:flex;flex-wrap:wrap;gap:.25rem;margin:.1rem 0 .2rem}
-.badge-sm{display:inline-flex;align-items:center;gap:.15rem;font-size:.68rem;padding:.1rem .38rem;border-radius:5px;background:var(--bg-2);border:1px solid var(--border);color:var(--ink2);font-variant-numeric:tabular-nums;font-family:var(--mono)}
+.gr-preview{display:flex;flex-wrap:wrap;gap:.2rem .25rem;margin:.1rem 0 .2rem}
+.badge-sm{display:inline-flex;align-items:center;gap:.15rem;font-size:.68rem;padding:.1rem .38rem;border-radius:5px;background:var(--bg-2);border:1px solid var(--border);color:var(--ink2);font-variant-numeric:tabular-nums;font-family:var(--mono);max-width:100%}
+.badge-sm .pn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:7em}
 .badge-sm.b-cheap{color:#059669;border-color:#6ee7b7;background:rgba(5,150,105,.08)}
 .badge-sm.b-warn{color:#d97706;border-color:#fcd34d;background:rgba(217,119,6,.08)}
 .badge-sm.b-ok{color:var(--ink2)}
@@ -769,7 +770,7 @@ func groupRatioPills(lang string, groups []domain.GroupDisplay) string {
 			bc = "b-warn"
 		}
 		b.WriteString(fmt.Sprintf(
-			`<span class="badge-sm %s" title="%s">%s <b>%s</b>%s</span>`,
+			`<span class="badge-sm %s" title="%s"><span class="pn">%s</span> <b>%s</b>%s</span>`,
 			bc, esc(g.Name), esc(g.Name), fmtRatio(g.Ratio)+"x", overrideMark(lang, g)))
 	}
 	b.WriteString(`</div>`)
