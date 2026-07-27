@@ -843,20 +843,21 @@ func (s *Server) renderGroupSettingsSection(lang string, stationID string, group
 		if r.hasRatio {
 			ratioCell = fmt.Sprintf(`<span class="num mono">%.2fx</span>`, r.ratio)
 		}
-		b.WriteString(fmt.Sprintf(`<tr data-grp="%s"><td><input type="checkbox" name="visible" %s></td>`,
+		b.WriteString(fmt.Sprintf(`<tr data-grp="%s" draggable="true"><td><input type="checkbox" name="visible" %s></td>`,
 			esc(r.name), checked))
 		b.WriteString(`<td><span class="mono">` + esc(r.name) + `</span></td>`)
 		b.WriteString(`<td>` + ratioCell + `</td>`)
-		b.WriteString(`<td><button class="btn btn-sm btn-outline" onclick="tmGcMove(this,-1)">` + t(lang, "btn.moveup") + `</button> ` +
-			`<button class="btn btn-sm btn-outline" onclick="tmGcMove(this,1)">` + t(lang, "btn.movedown") + `</button></td></tr>`)
+		b.WriteString(`<td class="drag-handle" title="` + esc(t(lang, "form.drag_hint")) + `">☰</td></tr>`)
 	}
 	b.WriteString(`</tbody></table></div>`)
 	b.WriteString(`<div class="btn-group" style="margin-top:.8rem"><button class="btn" onclick="tmGcSave('` + esc(stationID) + `')">` +
 		t(lang, "btn.savegroupconfig") + `</button> <span id="tm-gc-status" class="meta"></span></div>`)
 	b.WriteString(`<script>
-function tmGcMove(btn,dir){var tr=btn.closest('tr'),tb=tr.parentNode;
- if(dir<0&&tr.previousElementSibling)tb.insertBefore(tr,tr.previousElementSibling);
- else if(dir>0&&tr.nextElementSibling)tb.insertBefore(tr,tr.nextElementSibling.nextSibling);}
+(function(){var tb=document.getElementById('tm-gc-body');if(!tb)return;var drag=null;
+tb.addEventListener('dragstart',function(e){var tr=e.target.closest('tr[data-grp]');if(!tr)return;drag=tr;tr.classList.add('dragging');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',tr.dataset.grp);});
+tb.addEventListener('dragend',function(){if(drag)drag.classList.remove('dragging');drag=null;[].forEach.call(tb.querySelectorAll('.drag-over'),function(r){r.classList.remove('drag-over');});});
+tb.addEventListener('dragover',function(e){e.preventDefault();e.dataTransfer.dropEffect='move';var tr=e.target.closest('tr[data-grp]');if(!tr||tr===drag)return;[].forEach.call(tb.querySelectorAll('.drag-over'),function(r){r.classList.remove('drag-over');});tr.classList.add('drag-over');});
+tb.addEventListener('drop',function(e){e.preventDefault();var target=e.target.closest('tr[data-grp]');if(!target||!drag||target===drag)return;var rect=target.getBoundingClientRect();var mid=rect.top+rect.height/2;if(e.clientY<mid){tb.insertBefore(drag,target);}else{tb.insertBefore(drag,target.nextSibling);}});})();
 function tmGcSave(id){var rows=document.querySelectorAll('#tm-gc-body tr');
  var gs=[];rows.forEach(function(tr,i){var cb=tr.querySelector('[name=visible]');
  gs.push({group_name:tr.dataset.grp,visible:!!cb.checked,sort_order:i});});
