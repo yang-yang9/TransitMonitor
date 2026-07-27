@@ -543,8 +543,8 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 				var cb strings.Builder
 				cb.WriteString(`<div class="meta change-hints"><span class="badge b-warn">` + t(lang, "recent.change") + `</span>`)
 				for _, c := range changes {
-					cb.WriteString(fmt.Sprintf(` <span class="ch-item">%s → <b>%s</b> (%s)<span class="ch-ts">%s</span></span>`,
-						esc(c.ev.Group), esc(c.ev.New), fmtPct(c.ev.DeltaPct), fmtTimeShort(c.ev.ObservedAt)))
+					cb.WriteString(fmt.Sprintf(`<span class="ch-item">%s → <b>%s</b><span class="ch-ts">%s</span></span>`,
+						esc(c.ev.Group), esc(c.ev.New), fmtTimeShort(c.ev.ObservedAt)))
 				}
 				cb.WriteString(`</div>`)
 				changeHint = cb.String()
