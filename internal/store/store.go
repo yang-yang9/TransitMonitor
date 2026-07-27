@@ -459,7 +459,7 @@ func (s *Store) ReorderStations(ctx context.Context, orderedIDs []string) error 
 // (see domain.PartitionGroups).
 func (s *Store) GetStationGroupConfigs(ctx context.Context, stationID string) ([]domain.StationGroupConfig, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT station_id, group_name, visible, sort_order FROM station_group_config WHERE station_id=? ORDER BY sort_order, group_name`,
+		`SELECT station_id, group_name, visible, pinned, sort_order FROM station_group_config WHERE station_id=? ORDER BY sort_order, group_name`,
 		stationID)
 	if err != nil {
 		return nil, err
@@ -468,11 +468,12 @@ func (s *Store) GetStationGroupConfigs(ctx context.Context, stationID string) ([
 	var out []domain.StationGroupConfig
 	for rows.Next() {
 		var c domain.StationGroupConfig
-		var vis int
-		if err := rows.Scan(&c.StationID, &c.GroupName, &vis, &c.SortOrder); err != nil {
+		var vis, pin int
+		if err := rows.Scan(&c.StationID, &c.GroupName, &vis, &pin, &c.SortOrder); err != nil {
 			return nil, err
 		}
 		c.Visible = vis != 0
+		c.Pinned = pin != 0
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -484,10 +485,14 @@ func (s *Store) UpsertStationGroupConfig(ctx context.Context, cfg domain.Station
 	if cfg.Visible {
 		vis = 1
 	}
+	pin := 0
+	if cfg.Pinned {
+		pin = 1
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO station_group_config (station_id, group_name, visible, sort_order) VALUES (?,?,?,?)
-		 ON CONFLICT(station_id, group_name) DO UPDATE SET visible=excluded.visible, sort_order=excluded.sort_order`,
-		cfg.StationID, cfg.GroupName, vis, cfg.SortOrder)
+		`INSERT INTO station_group_config (station_id, group_name, visible, pinned, sort_order) VALUES (?,?,?,?,?)
+		 ON CONFLICT(station_id, group_name) DO UPDATE SET visible=excluded.visible, pinned=excluded.pinned, sort_order=excluded.sort_order`,
+		cfg.StationID, cfg.GroupName, vis, pin, cfg.SortOrder)
 	return err
 }
 
@@ -508,9 +513,13 @@ func (s *Store) SaveStationGroupConfigs(ctx context.Context, stationID string, c
 		if c.Visible {
 			vis = 1
 		}
+		pin := 0
+		if c.Pinned {
+			pin = 1
+		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO station_group_config (station_id, group_name, visible, sort_order) VALUES (?,?,?,?)`,
-			c.StationID, c.GroupName, vis, c.SortOrder); err != nil {
+			`INSERT INTO station_group_config (station_id, group_name, visible, pinned, sort_order) VALUES (?,?,?,?,?)`,
+			c.StationID, c.GroupName, vis, pin, c.SortOrder); err != nil {
 			return err
 		}
 	}

@@ -196,6 +196,11 @@ details.sec[open]>summary{border-bottom:1px solid var(--border)}
 [data-theme="dark"] .gcell.p-mid{background:rgba(255,255,255,.04);color:var(--ink2)}
 [data-theme="dark"] .gcell.p-high{background:rgba(251,191,36,.12);color:#fbbf24}
 .gstar{font-size:.7rem;color:var(--primary);margin-left:.15rem}
+.pin-btn{background:none;border:none;cursor:pointer;font-size:1rem;opacity:.3;transition:opacity .15s;padding:.1rem .3rem;line-height:1}
+.pin-btn:hover{opacity:.7}
+.pin-btn.pinned{opacity:1}
+.gr-row.gr-pinned .gr-name{font-weight:700;color:var(--primary)}
+.gr-row.gr-pinned .gr-val{color:var(--primary);font-weight:800}
 
 /* ratio table visual bars + group separators */
 .rat-bar{height:7px;background:var(--bg-2);border-radius:4px;overflow:hidden;margin-bottom:.2rem;min-width:80px}
@@ -530,9 +535,8 @@ func renderTable(lang string, cols []string, rows [][]string) string {
 }
 
 // renderRatioTable renders the model-ratio table, grouping rows by the first cell
-// (group name) with a full-width separator row carrying the group + its ratio.
-// hidden maps group names that should be tagged 已隐藏; visible groups get a ★ tag.
-func renderRatioTable(cols []string, rows [][]string, hidden map[string]bool) string {
+// (group name) with a full-width separator row carrying the group + a tier tag.
+func renderRatioTable(cols []string, rows [][]string, hidden, pinned map[string]bool) string {
 	var b strings.Builder
 	b.WriteString(`<div class="tbl-wrap"><table><thead><tr>`)
 	for _, c := range cols {
@@ -545,11 +549,13 @@ func renderRatioTable(cols []string, rows [][]string, hidden map[string]bool) st
 	for _, row := range rows {
 		grp := row[0]
 		if grp != prev {
-			tag := ""
+			tag := ` <span class="badge-sm b-ok">` + grp[0:0] + `</span>` // placeholder — overwritten below
 			if hidden != nil && hidden[grp] {
 				tag = ` <span class="badge-sm b-warn">已隐藏</span>`
+			} else if pinned != nil && pinned[grp] {
+				tag = ` <span class="badge-sm b-cheap">⭐ 置顶</span>`
 			} else {
-				tag = ` <span class="badge-sm b-cheap">★</span>`
+				tag = ""
 			}
 			b.WriteString(`<tr class="grp-sep"><td colspan="` + fmt.Sprint(len(cols)) + `">` +
 				`<span class="grp-tag">` + grp + `</span>` + tag + `</td></tr>`)
@@ -743,11 +749,17 @@ func groupRatioChart(lang string, groups []domain.GroupDisplay, lg bool) string 
 		} else if g.Ratio > 1.0 {
 			bc = "b-warn"
 		}
+		rowCls := "gr-row"
+		namePrefix := ""
+		if g.Pinned {
+			rowCls = "gr-row gr-pinned"
+			namePrefix = "⭐ "
+		}
 		b.WriteString(fmt.Sprintf(
-			`<div class="gr-row"><span class="gr-name" title="%s">%s</span>`+
+			`<div class="%s"><span class="gr-name" title="%s">%s%s</span>`+
 				`<div class="gr-track"><span class="gr-bar %s" style="width:%.1f%%"></span></div>`+
 				`<span class="gr-val">%s%s</span></div>`,
-			esc(g.Name), esc(g.Name), bc, pct, fmtRatio(g.Ratio)+"x", overrideMark(lang, g)))
+			rowCls, esc(g.Name), namePrefix, esc(g.Name), bc, pct, fmtRatio(g.Ratio)+"x", overrideMark(lang, g)))
 	}
 	b.WriteString(`</div>`)
 	return b.String()

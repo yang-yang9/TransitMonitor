@@ -430,6 +430,7 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode st
 		gr     map[string]float64
 		defs   map[string]float64
 		hidden map[string]bool
+		pinned map[string]bool
 	}
 	rows := make([]stGR, len(sts))
 	groupSet := map[string]bool{}
@@ -438,12 +439,16 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode st
 		defs, _ := s.store.LatestGroupRateDefaults(context.Background(), st.ID)
 		cfgs, _ := s.store.GetStationGroupConfigs(context.Background(), st.ID)
 		hidden := map[string]bool{}
+		pinned := map[string]bool{}
 		for _, c := range cfgs {
 			if !c.Visible {
 				hidden[c.GroupName] = true
 			}
+			if c.Pinned {
+				pinned[c.GroupName] = true
+			}
 		}
-		rows[i] = stGR{name: st.Name, gr: gr, defs: defs, hidden: hidden}
+		rows[i] = stGR{name: st.Name, gr: gr, defs: defs, hidden: hidden, pinned: pinned}
 		for g := range gr {
 			if !hidden[g] { // OR-of-visible: row exists iff ≥1 station has it visible
 				groupSet[g] = true
@@ -528,7 +533,9 @@ func (s *Server) matrixGroupTable(lang string, sts []domain.Station, sortMode st
 				row = append(row, `<span class="gcell p-na">—</span>`)
 			} else {
 				star := ""
-				if !r.hidden[g] {
+				if r.pinned[g] {
+					star = `<span class="gstar">⭐</span>`
+				} else if !r.hidden[g] {
 					star = `<span class="gstar">★</span>`
 				}
 				gd := domain.GroupDisplay{Ratio: v}

@@ -390,7 +390,7 @@ func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 			trendHTML +
 			`<h2>` + t(lang, "section.groupchanges") + `</h2>` + renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.group"), t(lang, "col.oldratio"), t(lang, "col.newratio"), t(lang, "col.deltapct"), t(lang, "col.severity")}, groupPage) + gpg +
 			`<details class="sec"><summary>` + t(lang, "expand.models") + ` (` + fmt.Sprintf("%d", len(ratioRows)) + `)</summary>` +
-			renderRatioTable([]string{t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.modelratio"), t(lang, "col.completionratio"), t(lang, "col.groupratio"), t(lang, "col.effratio"), t(lang, "col.status")}, ratioRows, hiddenGroupsMap(groupDisplay)) + `</details>` +
+			renderRatioTable([]string{t(lang, "col.group"), t(lang, "col.model"), t(lang, "col.modelratio"), t(lang, "col.completionratio"), t(lang, "col.groupratio"), t(lang, "col.effratio"), t(lang, "col.status")}, ratioRows, hiddenGroupsMap(groupDisplay), pinnedGroupsMap(groupDisplay)) + `</details>` +
 			`<details class="sec"><summary>` + t(lang, "expand.modelchanges") + ` (` + fmt.Sprintf("%d", len(modelChangeRows)) + `)</summary>` +
 			renderTable(lang, []string{t(lang, "col.time"), t(lang, "col.model"), t(lang, "col.field"), t(lang, "col.deltapct"), t(lang, "col.severity")}, modelPage) + mpg + `</details>` +
 			`<details class="sec"><summary>` + t(lang, "expand.probes") + ` (` + fmt.Sprintf("%d", len(probeRows)) + `)</summary>` +
@@ -810,36 +810,29 @@ func (s *Server) renderGroupSettingsSection(lang string, stationID string, group
 	for g := range byName {
 		names[g] = true
 	}
-	type row struct {
-		name     string
-		visible  bool
-		order    int
-		hasRatio bool
-		ratio    float64
-	}
-	rows := make([]row, 0, len(names))
+	rows := make([]settingsRow, 0, len(names))
 	for g := range names {
-		r := row{name: g}
+		r := settingsRow{name: g}
 		if c, ok := byName[g]; ok {
-			r.visible, r.order = c.Visible, c.SortOrder
+			r.visible, r.pinned, r.order = c.Visible, c.Pinned, c.SortOrder
 		} else {
-			r.visible, r.order = true, 0
+			r.visible, r.pinned, r.order = true, false, 0
 		}
 		if v, ok := groupRatios[g]; ok {
 			r.hasRatio, r.ratio = true, v
 		} else {
-			r.ratio = 1e308 // orphan (configured but absent from current poll) → sort last within its tier
+			r.ratio = 1e308
 		}
 		rows = append(rows, r)
 	}
 	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].visible != rows[j].visible {
-			return rows[i].visible
+		ti, tj := settingsTier(rows[i]), settingsTier(rows[j])
+		if ti != tj {
+			return ti < tj
 		}
 		if rows[i].order != rows[j].order {
 			return rows[i].order < rows[j].order
 		}
-		// default tie-break: cheapest ratio first, then name for determinism.
 		if rows[i].ratio != rows[j].ratio {
 			return rows[i].ratio < rows[j].ratio
 		}
@@ -847,7 +840,8 @@ func (s *Server) renderGroupSettingsSection(lang string, stationID string, group
 	})
 	var b strings.Builder
 	b.WriteString(`<details class="sec"><summary>` + t(lang, "section.groupsettings") + `</summary>`)
-	b.WriteString(`<div class="tbl-wrap"><table><thead><tr><th>` + t(lang, "col.visible") +
+	b.WriteString(`<div class="tbl-wrap"><table><thead><tr><th>` + t(lang, "col.pinned") +
+		`</th><th>` + t(lang, "col.visible") +
 		`</th><th>` + t(lang, "col.group") + `</th><th>` + t(lang, "col.groupratio") +
 		`</th><th>` + t(lang, "col.order") + `</th></tr></thead><tbody id="tm-gc-body">`)
 	for _, r := range rows {
@@ -855,12 +849,16 @@ func (s *Server) renderGroupSettingsSection(lang string, stationID string, group
 		if r.visible {
 			checked = "checked"
 		}
+		pinCls := "pin-btn"
+		if r.pinned {
+			pinCls = "pin-btn pinned"
+		}
 		ratioCell := `<span class="mono p-na">—</span>`
 		if r.hasRatio {
 			ratioCell = fmt.Sprintf(`<span class="num mono">%.2fx</span>`, r.ratio)
 		}
-		b.WriteString(fmt.Sprintf(`<tr data-grp="%s" draggable="true"><td><input type="checkbox" name="visible" %s></td>`,
-			esc(r.name), checked))
+		b.WriteString(fmt.Sprintf(`<tr data-grp="%s" draggable="true"><td><button class="%s" onclick="this.classList.toggle('pinned');if(window.tmMarkDirty)tmMarkDirty()">⭐</button></td><td><input type="checkbox" name="visible" %s></td>`,
+			esc(r.name), pinCls, checked))
 		b.WriteString(`<td><span class="mono">` + esc(r.name) + `</span></td>`)
 		b.WriteString(`<td>` + ratioCell + `</td>`)
 		b.WriteString(`<td class="drag-handle" title="` + esc(t(lang, "form.drag_hint")) + `">☰</td></tr>`)
@@ -876,8 +874,8 @@ tb.addEventListener('dragend',function(){if(drag)drag.classList.remove('dragging
 tb.addEventListener('dragover',function(e){e.preventDefault();e.dataTransfer.dropEffect='move';var tr=e.target.closest('tr[data-grp]');if(!tr||tr===drag)return;var rect=tr.getBoundingClientRect();var above=e.clientY<rect.top+rect.height/2;clearMarkers();tr.classList.add(above?'drag-over-above':'drag-over-below');});
 tb.addEventListener('drop',function(e){e.preventDefault();var target=e.target.closest('tr[data-grp]');if(!target||!drag||target===drag)return;clearMarkers();var rect=target.getBoundingClientRect();if(e.clientY<rect.top+rect.height/2){tb.insertBefore(drag,target);}else{tb.insertBefore(drag,target.nextSibling);}});})();
 function tmGcSave(id){var rows=document.querySelectorAll('#tm-gc-body tr');
- var gs=[];rows.forEach(function(tr,i){var cb=tr.querySelector('[name=visible]');
- gs.push({group_name:tr.dataset.grp,visible:!!cb.checked,sort_order:i});});
+ var gs=[];rows.forEach(function(tr,i){var cb=tr.querySelector('[name=visible]');var pb=tr.querySelector('.pin-btn');
+ gs.push({group_name:tr.dataset.grp,visible:!!cb.checked,pinned:pb&&pb.classList.contains('pinned'),sort_order:i});});
  fetch('/stations/'+id+'/groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groups:gs})})
  .then(function(r){return r.json();}).then(function(d){
   var st=document.getElementById('tm-gc-status');if(st)st.textContent=d.ok?'✓':'✗ '+d.error;
@@ -899,10 +897,41 @@ func hiddenGroupsMap(displays []domain.GroupDisplay) map[string]bool {
 	return m
 }
 
+// pinnedGroupsMap returns a set of group names that are pinned.
+func pinnedGroupsMap(displays []domain.GroupDisplay) map[string]bool {
+	m := map[string]bool{}
+	for _, d := range displays {
+		if d.Pinned {
+			m[d.Name] = true
+		}
+	}
+	return m
+}
+
+type settingsRow struct {
+	name     string
+	visible  bool
+	pinned   bool
+	order    int
+	hasRatio bool
+	ratio    float64
+}
+
+func settingsTier(r settingsRow) int {
+	if r.pinned && r.visible {
+		return 0
+	}
+	if r.visible {
+		return 1
+	}
+	return 2
+}
+
 // groupConfigInput is one row of the POST /stations/{id}/groups payload.
 type groupConfigInput struct {
 	GroupName string `json:"group_name"`
 	Visible   bool   `json:"visible"`
+	Pinned    bool   `json:"pinned"`
 	SortOrder int    `json:"sort_order"`
 }
 
@@ -924,7 +953,7 @@ func (s *Server) stationGroupSettingsSave(w http.ResponseWriter, r *http.Request
 	cfgs := make([]domain.StationGroupConfig, 0, len(in.Groups))
 	for _, g := range in.Groups {
 		cfgs = append(cfgs, domain.StationGroupConfig{
-			StationID: id, GroupName: g.GroupName, Visible: g.Visible, SortOrder: g.SortOrder,
+			StationID: id, GroupName: g.GroupName, Visible: g.Visible, Pinned: g.Pinned, SortOrder: g.SortOrder,
 		})
 	}
 	if err := s.store.SaveStationGroupConfigs(r.Context(), id, cfgs); err != nil {
