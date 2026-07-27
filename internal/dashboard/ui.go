@@ -101,10 +101,14 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
    band from rendering 3-4 cramped columns; the 768px single-col fallback still
    applies. minmax(300px) above is the detailed-bars default. */
 .grid.grid-compact{grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:.8rem}
-.grid.grid-compact .stcard{padding:.85rem .9rem;gap:.4rem}
+.grid.grid-compact .stcard{padding:.85rem .9rem;gap:.3rem}
 .grid.grid-compact .stcard .st-name{font-size:.92rem}
 .grid.grid-compact .stcard .meta:not(.change-hints){display:none}
-.grid.grid-compact .change-hints{font-size:.72rem}
+.grid.grid-compact .change-hints{font-size:.68rem;gap:.1rem;line-height:1.2;margin-top:.15rem}
+.grid.grid-compact .change-hints .badge{font-size:.62rem;padding:.05rem .3rem}
+.grid.grid-compact .ch-item{gap:0}
+.grid.grid-compact .ch-val{font-size:.66rem}
+.grid.grid-compact .ch-ts{font-size:.58rem;margin-left:.25rem}
 
 /* ── station KPI cards ── */
 .stcard{display:flex;flex-direction:column;gap:.5rem;cursor:pointer;text-decoration:none;color:inherit;border-left-color:var(--ok)}
