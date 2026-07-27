@@ -101,9 +101,12 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 .stcard .kpi-label{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:.4rem}
 .stcard .kpi{font-size:2.2rem;font-weight:800;font-variant-numeric:tabular-nums;line-height:1;margin:.25rem 0;color:var(--ink);letter-spacing:-.02em}
 .stcard .meta{color:var(--muted);font-size:.82rem;line-height:1.7;word-break:break-all}
-.change-hints{display:flex;flex-direction:column;gap:.15rem;font-size:.78rem;line-height:1.4}
-.ch-item{display:flex;align-items:baseline;gap:.35rem;white-space:nowrap}
-.ch-ts{font-size:.68rem;color:var(--muted);margin-left:auto;opacity:.7}
+.change-hints{display:flex;flex-direction:column;gap:.2rem;font-size:.78rem;line-height:1.3}
+.ch-item{display:flex;align-items:baseline;gap:0}
+.ch-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2)}
+.ch-val{white-space:nowrap;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:.75rem}
+.ch-old{color:var(--muted);opacity:.65}
+.ch-ts{font-size:.65rem;color:var(--muted);opacity:.55;white-space:nowrap;margin-left:.4rem;min-width:2rem;text-align:right}
 .gr-preview{display:flex;flex-wrap:wrap;gap:.3rem;margin:.15rem 0 .25rem}
 .badge-sm{display:inline-flex;align-items:center;gap:.15rem;font-size:.7rem;padding:.12rem .4rem;border-radius:5px;background:var(--bg-2);border:1px solid var(--border);color:var(--ink2);font-variant-numeric:tabular-nums;font-family:var(--mono)}
 .badge-sm.b-cheap{color:#059669;border-color:#6ee7b7;background:rgba(5,150,105,.08)}
