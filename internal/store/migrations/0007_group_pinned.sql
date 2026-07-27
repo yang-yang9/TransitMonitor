@@ -1,0 +1,1 @@
+ALTER TABLE station_group_config ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;

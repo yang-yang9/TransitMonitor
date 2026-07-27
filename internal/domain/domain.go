@@ -315,6 +315,7 @@ type StationGroupConfig struct {
 	StationID string
 	GroupName string
 	Visible   bool
+	Pinned    bool
 	SortOrder int
 }
 
@@ -323,6 +324,7 @@ type GroupDisplay struct {
 	Name    string
 	Ratio   float64
 	Visible bool
+	Pinned  bool
 	Order   int
 	// Default is the group's default rate before a per-user override. Zero when
 	// no override metadata is available (then Overridden is false regardless).
@@ -345,9 +347,9 @@ func PartitionGroups(ratios map[string]float64, defaults map[string]float64, cfg
 	for name, r := range ratios {
 		c, ok := byName[name]
 		if !ok {
-			c = StationGroupConfig{Visible: true, SortOrder: 0}
+			c = StationGroupConfig{Visible: true, Pinned: false, SortOrder: 0}
 		}
-		gd := GroupDisplay{Name: name, Ratio: r, Visible: c.Visible, Order: c.SortOrder}
+		gd := GroupDisplay{Name: name, Ratio: r, Visible: c.Visible, Pinned: c.Pinned, Order: c.SortOrder}
 		if d, has := defaults[name]; has && d > 0 && d != r {
 			gd.Default = d
 			gd.Overridden = true
@@ -355,14 +357,14 @@ func PartitionGroups(ratios map[string]float64, defaults map[string]float64, cfg
 		out = append(out, gd)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Visible != out[j].Visible {
-			return out[i].Visible
+		// tier: pinned+visible=0, visible=1, hidden=2
+		ti, tj := groupTier(out[i]), groupTier(out[j])
+		if ti != tj {
+			return ti < tj
 		}
 		if out[i].Order != out[j].Order {
 			return out[i].Order < out[j].Order
 		}
-		// default tie-break (no saved sort_order): cheapest ratio first, then name
-		// for determinism when ratios are equal.
 		if out[i].Ratio != out[j].Ratio {
 			return out[i].Ratio < out[j].Ratio
 		}
@@ -371,8 +373,18 @@ func PartitionGroups(ratios map[string]float64, defaults map[string]float64, cfg
 	return out
 }
 
+func groupTier(g GroupDisplay) int {
+	if g.Pinned && g.Visible {
+		return 0
+	}
+	if g.Visible {
+		return 1
+	}
+	return 2
+}
+
 // SplitVisible partitions an ordered GroupDisplay slice into (visible, hidden),
-// preserving order within each half.
+// preserving order within each half. Pinned groups land in the visible half.
 func SplitVisible(groups []GroupDisplay) (visible, hidden []GroupDisplay) {
 	for _, g := range groups {
 		if g.Visible {

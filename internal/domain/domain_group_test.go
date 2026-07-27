@@ -71,6 +71,32 @@ func TestPartitionGroupsDuplicateSortOrderStableByName(t *testing.T) {
 // TestPartitionGroupsOverrideBadge: when a group's ratio differs from its
 // recorded default (per-user override), PartitionGroups must set Overridden +
 // Default so the UI can badge it; groups matching their default stay unbadged.
+func TestPartitionGroupsPinnedSortsTierOrder(t *testing.T) {
+	ratios := map[string]float64{"vip": 0.5, "pro": 1.0, "default": 1.0, "internal": 2.0}
+	cfgs := []StationGroupConfig{
+		{GroupName: "vip", Visible: true, Pinned: true, SortOrder: 0},
+		{GroupName: "pro", Visible: true, Pinned: false, SortOrder: 0},
+		{GroupName: "default", Visible: true, Pinned: false, SortOrder: 1},
+		{GroupName: "internal", Visible: false, Pinned: false, SortOrder: 0},
+	}
+	got := PartitionGroups(ratios, nil, cfgs)
+	// tier 0 (pinned+visible): vip
+	// tier 1 (visible): pro (sort 0), default (sort 1)
+	// tier 2 (hidden): internal
+	if got[0].Name != "vip" || !got[0].Pinned {
+		t.Errorf("tier 0: want pinned vip first, got %+v", got[0])
+	}
+	if got[1].Name != "pro" || got[1].Pinned {
+		t.Errorf("tier 1 first: want unpinned pro, got %+v", got[1])
+	}
+	if got[2].Name != "default" {
+		t.Errorf("tier 1 second: want default, got %+v", got[2])
+	}
+	if got[3].Name != "internal" || got[3].Visible {
+		t.Errorf("tier 2: want hidden internal, got %+v", got[3])
+	}
+}
+
 func TestPartitionGroupsOverrideBadge(t *testing.T) {
 	ratios := map[string]float64{"kiro-低缓": 0.145, "kiro-高缓": 0.18}
 	defaults := map[string]float64{"kiro-低缓": 0.15, "kiro-高缓": 0.18}
