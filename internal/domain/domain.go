@@ -170,6 +170,12 @@ type RawSnapshot struct {
 	RawPayloads      map[string][]byte // path → raw body
 	Capabilities     CapabilityReport
 	GroupRatios      map[string]float64 // group_name → ratio (from /api/pricing or /api/user/self/groups)
+	// GroupRateDefaults holds each group's DEFAULT rate_multiplier (before any
+	// per-user override is applied). When a per-user override replaces the
+	// default in GroupRatios, the original default survives here so the UI can
+	// badge the override and surface the original on hover. Empty for sources
+	// that don't expose per-user overrides (new-api, or sub2api without /groups/rates).
+	GroupRateDefaults map[string]float64 // group_name → default rate (pre per-user override)
 }
 
 // GroupRatioSnapshot is one point in a station's group-ratio time series
@@ -318,13 +324,19 @@ type GroupDisplay struct {
 	Ratio   float64
 	Visible bool
 	Order   int
+	// Default is the group's default rate before a per-user override. Zero when
+	// no override metadata is available (then Overridden is false regardless).
+	Default    float64
+	Overridden bool // true when Ratio is a per-user override (Default known and differs)
 }
 
 // PartitionGroups merges a station's current group ratios with its display config
 // into an ordered view: visible first (by sort_order asc, then name asc), then
 // hidden (same tie-break). Groups with no config row default to visible=true,
 // sort_order=0 — so new groups surface by default rather than silently hiding.
-func PartitionGroups(ratios map[string]float64, cfgs []StationGroupConfig) []GroupDisplay {
+// `defaults` carries each group's pre-override default rate (may be nil); when a
+// group's ratio differs from its default, Overridden is set so the UI can badge it.
+func PartitionGroups(ratios map[string]float64, defaults map[string]float64, cfgs []StationGroupConfig) []GroupDisplay {
 	byName := make(map[string]StationGroupConfig, len(cfgs))
 	for _, c := range cfgs {
 		byName[c.GroupName] = c
@@ -335,7 +347,12 @@ func PartitionGroups(ratios map[string]float64, cfgs []StationGroupConfig) []Gro
 		if !ok {
 			c = StationGroupConfig{Visible: true, SortOrder: 0}
 		}
-		out = append(out, GroupDisplay{Name: name, Ratio: r, Visible: c.Visible, Order: c.SortOrder})
+		gd := GroupDisplay{Name: name, Ratio: r, Visible: c.Visible, Order: c.SortOrder}
+		if d, has := defaults[name]; has && d > 0 && d != r {
+			gd.Default = d
+			gd.Overridden = true
+		}
+		out = append(out, gd)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Visible != out[j].Visible {

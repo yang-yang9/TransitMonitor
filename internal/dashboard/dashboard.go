@@ -502,9 +502,10 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 			name = st.ID
 		}
 		grs, _ := s.store.LatestGroupRatios(ctx, st.ID)
+		grd, _ := s.store.LatestGroupRateDefaults(ctx, st.ID)
 		cfgs, _ := s.store.GetStationGroupConfigs(ctx, st.ID)
-		visible, hidden := domain.SplitVisible(domain.PartitionGroups(grs, cfgs))
-		chart := groupRatioChart(visible, false) + renderHiddenGroupsExpander(lang, hidden)
+		visible, hidden := domain.SplitVisible(domain.PartitionGroups(grs, grd, cfgs))
+		chart := groupRatioChart(lang, visible, false) + renderHiddenGroupsExpander(lang, hidden)
 		// recent group-ratio change hint
 		changeHint := ""
 		if evs, _ := s.store.ListChangeEvents(ctx, st.ID, 20); len(evs) > 0 {
