@@ -1035,10 +1035,10 @@ func (s *Server) stationAlertOverrideSection(ctx context.Context, lang, stationI
 				dirSel = *ro.Direction
 			}
 			b.WriteString(`<div class="rule-card card" data-rule="` + esc(r.Name) + `"><div class="rule-fields">`)
-			// rule name (read-only)
+			// rule name (read-only) — label carries the type tag
 			b.WriteString(`<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") +
-				`</span><input class="ov-name" value="` + esc(r.Name) + `" readonly>` +
-				`<p class="meta">` + ruleTypeLabel(r.Type) + `</p></div>`)
+				` <span class="rule-type-tag">` + ruleTypeLabel(r.Type) + `</span></span>` +
+				`<input class="ov-name" value="` + esc(r.Name) + `" readonly></div>`)
 			// threshold override
 			b.WriteString(`<div class="field rule-f-thr"><span class="field-label">` + t(lang, "form.rule.threshold") +
 				`</span><input class="ov-thr" type="number" step="any" min="0" value="` + thrVal +

@@ -400,6 +400,8 @@ button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .rule-f-del{display:flex;align-items:end}
 .rule-actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.8rem}
 .dir-na{align-self:center;color:var(--muted);font-size:.85rem}
+.rule-type-tag{display:inline-block;margin-left:.4rem;padding:.05rem .4rem;font-size:.7rem;font-weight:600;color:var(--primary-700);background:var(--primary-50);border-radius:var(--radius-xs);text-transform:none;letter-spacing:0}
+[data-theme="dark"] .rule-type-tag{color:var(--primary-300);background:var(--primary-100)}
 .rule-toggle{position:relative;display:inline-block;width:40px;height:22px}
 .rule-toggle input{opacity:0;width:0;height:0}
 .rule-toggle-slider{position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:22px;transition:.2s}
