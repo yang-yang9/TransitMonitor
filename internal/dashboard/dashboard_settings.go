@@ -205,7 +205,7 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 		b.w(`</select><span class="dir-na">— 不适用</span></div>`)
 		// enabled toggle
 		b.w(`<div class="field rule-f-en"><span class="field-label">` + t(lang, "form.rule.enabled") + `</span>`)
-		b.w(`<label class="toggle"><input class="r-enabled" type="checkbox"` + chk + `><span class="toggle-slider"></span></label></div>`)
+		b.w(`<label class="rule-toggle"><input class="r-enabled" type="checkbox"` + chk + `><span class="rule-toggle-slider"></span></label></div>`)
 		// delete
 		b.w(`<div class="field rule-f-del"><span class="field-label">&nbsp;</span>`)
 		b.w(`<button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.rule-card').remove()">` + delLabel + `</button></div>`)
@@ -293,7 +293,7 @@ function tmAddRule(){
     +'<div class="field rule-f-type"><span class="field-label">` + t(lang, "form.rule.type") + `</span><select class="r-type" onchange="tmOnTypeChange(this)">'+_typeOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select></div>'
     +'<div class="field rule-f-thr"><span class="field-label">` + t(lang, "form.rule.threshold") + `</span><input class="r-threshold" type="number" step="any" min="0" value="5"></div>'
     +'<div class="field rule-f-dir"><span class="field-label">` + t(lang, "form.rule.direction") + `</span><select class="r-direction">'+_dirOpts.map(function(o){return '<option value="'+o.v+'">'+o.l+'</option>';}).join('')+'</select><span class="dir-na">— 不适用</span></div>'
-    +'<div class="field rule-f-en"><span class="field-label">` + t(lang, "form.rule.enabled") + `</span><label class="toggle"><input class="r-enabled" type="checkbox" checked><span class="toggle-slider"></span></label></div>'
+    +'<div class="field rule-f-en"><span class="field-label">` + t(lang, "form.rule.enabled") + `</span><label class="rule-toggle"><input class="r-enabled" type="checkbox" checked><span class="rule-toggle-slider"></span></label></div>'
     +'<div class="field rule-f-del"><span class="field-label">&nbsp;</span><button type="button" class="btn btn-sm btn-danger" onclick="this.closest(\'.rule-card\').remove()">` + delLabel + `</button></div>'
     +'</div>';
   body.appendChild(card);
