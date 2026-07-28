@@ -117,7 +117,7 @@ h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;pad
 
 /* ── station KPI cards ── */
 .stcard{display:flex;flex-direction:column;gap:.5rem;cursor:pointer;text-decoration:none;color:inherit;border-left-color:var(--ok)}
-.stcard:hover{transform:translateY(-3px);border-color:var(--primary);border-left-color:var(--primary)}
+.stcard:hover{transform:translateY(-3px);border-color:var(--primary);border-left-color:var(--primary);text-decoration:none}
 .stcard .st-hdr{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
 .stcard .st-name{font-weight:700;font-size:1rem;color:var(--ink)}
 .stcard .kpi-label{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;display:flex;align-items:center;gap:.4rem}
