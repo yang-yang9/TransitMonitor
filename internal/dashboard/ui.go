@@ -311,8 +311,8 @@ tr.drag-over-below td{border-bottom:2px solid var(--primary)!important}
 .form-sep{grid-column:1/-1;border:0;border-top:1px solid var(--border);margin:.4rem 0}
 .field{display:flex;flex-direction:column;gap:.35rem}
 .field-label{font-size:.76rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.field input,.field select{width:100%;padding:.65rem .8rem;font-size:.88rem;font-family:inherit;color:var(--ink);background:var(--input-bg);border:2px solid var(--input-border);border-radius:var(--radius-sm);outline:none;transition:border-color .15s,box-shadow .2s}
-.field input:focus,.field select:focus{border-color:var(--primary);box-shadow:var(--input-ring)}
+.field input:not([type="checkbox"]),.field select{width:100%;padding:.65rem .8rem;font-size:.88rem;font-family:inherit;color:var(--ink);background:var(--input-bg);border:2px solid var(--input-border);border-radius:var(--radius-sm);outline:none;transition:border-color .15s,box-shadow .2s}
+.field input:not([type="checkbox"]):focus,.field select:focus{border-color:var(--primary);box-shadow:var(--input-ring)}
 .field input::placeholder{color:var(--muted);opacity:.6}
 .field input[readonly]{opacity:.5;cursor:not-allowed;background:var(--bg-2)}
 .field select{-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath fill='%2364748b' d='M2 4.5l5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right .8rem center;padding-right:2.2rem;cursor:pointer}
@@ -320,7 +320,7 @@ tr.drag-over-below td{border-bottom:2px solid var(--primary)!important}
 [data-theme="dark"] .field select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14'%3E%3Cpath fill='%2394a3b8' d='M2 4.5l5 5 5-5'/%3E%3C/svg%3E")}
 [data-theme="dark"] .field select option{background:#1e293b;color:#e5e7eb}
 .toggle{position:relative;display:inline-flex;align-items:center;gap:.6rem;cursor:pointer;font-size:.88rem;color:var(--ink)}
-.toggle input{position:absolute;opacity:0;width:0;height:0}
+.toggle input{position:absolute;opacity:0;width:0;height:0;padding:0;border:0;margin:0;overflow:hidden}
 .toggle .slider{width:46px;height:26px;background:var(--input-border);border-radius:13px;position:relative;transition:background .2s;flex-shrink:0}
 .toggle .slider::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;background:#fff;border-radius:50%;transition:transform .2s;box-shadow:0 1px 4px rgba(0,0,0,.2)}
 .toggle input:checked+.slider{background:var(--primary);box-shadow:0 0 10px rgba(20,184,166,.3)}
