@@ -60,6 +60,8 @@ type Scheduler struct {
 	pendingAlerts  map[string][]alert.AlertEvent
 	lastDigest     map[string]time.Time
 
+	stationOverrides map[string]alert.StationAlertOverride // per-station alert overrides
+
 	failMu     sync.Mutex
 	failStreak map[string]int  // consecutive poll failures per station
 	authOK     map[string]bool // last known auth state per station (true = OK)
@@ -75,6 +77,7 @@ func New(stations []domain.Station, adapters map[string]adapter.Adapter, st *sto
 		lastAlert:             map[string]time.Time{},
 		pendingAlerts:         map[string][]alert.AlertEvent{},
 		lastDigest:            map[string]time.Time{},
+		stationOverrides:      map[string]alert.StationAlertOverride{},
 		failStreak:            map[string]int{},
 		authOK:                map[string]bool{},
 		snapshotRetentionDays: 7, obsRetentionDays: 30,
@@ -111,14 +114,15 @@ func (s *Scheduler) logger() *slog.Logger {
 }
 
 // shouldFire checks if an alert should fire (cooldown dedup).
-func (s *Scheduler) shouldFire(ev alert.AlertEvent) bool {
-	if s.cooldown <= 0 {
+func (s *Scheduler) shouldFire(stationID string, ev alert.AlertEvent) bool {
+	cd := s.effectiveCooldown(stationID)
+	if cd <= 0 {
 		return true
 	}
 	key := ev.Rule + "|" + ev.StationID + "|" + ev.Model
 	s.alertMu.Lock()
 	defer s.alertMu.Unlock()
-	if last, ok := s.lastAlert[key]; ok && s.Now().Sub(last) < s.cooldown {
+	if last, ok := s.lastAlert[key]; ok && s.Now().Sub(last) < cd {
 		return false
 	}
 	s.lastAlert[key] = s.Now()
@@ -137,8 +141,8 @@ func (s *Scheduler) snapshotRules() []alert.Rule {
 // rulesOfType returns the enabled rules of a given type. endpoint_auth_failed
 // and poll_failure_streak rules are emitted directly by the scheduler (not by
 // alert.Evaluate), so it looks them up here.
-func (s *Scheduler) rulesOfType(typ string) []alert.Rule {
-	rules := s.snapshotRules()
+func (s *Scheduler) rulesOfType(stationID, typ string) []alert.Rule {
+	rules := s.effectiveRules(stationID)
 	var out []alert.Rule
 	for _, r := range rules {
 		if r.Enabled && r.Type == typ {
@@ -168,7 +172,7 @@ func (s *Scheduler) evaluateBalanceRules(ctx context.Context, stationID string, 
 	}
 	// quota_below: remaining balance (USD) under threshold. Skip when the
 	// station reports an unlimited wallet (no meaningful "low" to fire on).
-	for _, r := range s.rulesOfType(alert.RuleQuotaBelow) {
+	for _, r := range s.rulesOfType(stationID, alert.RuleQuotaBelow) {
 		if bal.Unlimited {
 			continue
 		}
@@ -187,7 +191,7 @@ func (s *Scheduler) evaluateBalanceRules(ctx context.Context, stationID string, 
 	// quota_drop_pct: remaining dropped ≥ threshold % vs the previous reading.
 	// dropPct > 0 means balance decreased; direction "down" (default/both) fires
 	// on decrease, "up" fires on increase.
-	for _, r := range s.rulesOfType(alert.RuleQuotaDropPct) {
+	for _, r := range s.rulesOfType(stationID, alert.RuleQuotaDropPct) {
 		if prev.RemainingUSD <= 0 {
 			continue // no prior reading or prior was 0 — pct undefined
 		}
@@ -240,7 +244,7 @@ func (s *Scheduler) dispatchAlert(ctx context.Context, ev alert.AlertEvent) {
 	if s.Notifier == nil {
 		return
 	}
-	if !s.shouldFire(ev) {
+	if !s.shouldFire(ev.StationID, ev) {
 		return
 	}
 	s.digestMu.Lock()
@@ -270,8 +274,14 @@ func (s *Scheduler) flushStationAlerts(ctx context.Context, stationID string) {
 	if s.lastDigest == nil { // lazy init (test schedulers may skip New)
 		s.lastDigest = map[string]time.Time{}
 	}
-	if s.digestInterval > 0 {
-		if last, ok := s.lastDigest[stationID]; ok && now.Sub(last) < s.digestInterval {
+	// Read effective digest interval inline (already hold digestMu; calling
+	// effectiveDigestInterval would re-lock → deadlock).
+	di := s.digestInterval
+	if ov, ok := s.stationOverrides[stationID]; ok && ov.DigestIntervalMinutes != nil {
+		di = time.Duration(*ov.DigestIntervalMinutes) * time.Minute
+	}
+	if di > 0 {
+		if last, ok := s.lastDigest[stationID]; ok && now.Sub(last) < di {
 			s.digestMu.Unlock() // not yet → keep buffering
 			return
 		}
@@ -370,7 +380,7 @@ func (s *Scheduler) recordPollFailure(ctx context.Context, stationID string, err
 	// endpoint_auth_failed: fire only on the OK→failed transition (not every
 	// failed poll), so a persistently-broken station alerts once, not per-poll.
 	if isAuth && wasOK {
-		for _, r := range s.rulesOfType(alert.RuleEndpointAuthFail) {
+		for _, r := range s.rulesOfType(stationID, alert.RuleEndpointAuthFail) {
 			s.dispatchAlert(ctx, alert.AlertEvent{
 				Rule: r.Name, Type: alert.RuleEndpointAuthFail, StationID: stationID, Severity: "critical",
 				Payload:   map[string]any{"status": "auth_failed", "error": err.Error(), "observed_at": now},
@@ -381,7 +391,7 @@ func (s *Scheduler) recordPollFailure(ctx context.Context, stationID string, err
 
 	// poll_failure_streak: fire when the streak reaches (or first crosses) the
 	// threshold. Equal-to check fires exactly once per threshold crossing.
-	for _, r := range s.rulesOfType(alert.RulePollFailureStreak) {
+	for _, r := range s.rulesOfType(stationID, alert.RulePollFailureStreak) {
 		threshold := int(r.Threshold)
 		if threshold <= 0 {
 			threshold = 1
@@ -469,6 +479,10 @@ func (s *Scheduler) RemoveStation(id string) error {
 	if s.EncKey != nil && s.Store != nil {
 		_ = s.Store.DeleteStation(s.runCtx, id)
 	}
+	_ = s.Store.DeleteAppSetting(s.runCtx, stationAlertPrefix+id)
+	s.digestMu.Lock()
+	delete(s.stationOverrides, id)
+	s.digestMu.Unlock()
 	return nil
 }
 
@@ -570,7 +584,7 @@ func (s *Scheduler) PollOnce(ctx context.Context, stationID string) error {
 		}
 	}
 	if s.Notifier != nil {
-		for _, ev := range alert.Evaluate(s.snapshotRules(), events, nil) {
+		for _, ev := range alert.Evaluate(s.effectiveRules(stationID), events, nil) {
 			s.dispatchAlert(ctx, ev)
 		}
 	}
@@ -613,7 +627,7 @@ func (s *Scheduler) runStationProbe(ctx context.Context, st domain.Station, obs 
 			fmt.Sprintf("model=%s tokens=%d/%d markup=%.2f%% cost_usd=%.6f declared_unavailable=%v error=%s",
 				pres.Model, pres.TokensIn, pres.TokensOut, pres.MarkupPct, pres.CostUSD, pres.DeclaredUnavailable, pres.Error))
 		if s.Notifier != nil {
-			for _, ev := range alert.Evaluate(s.snapshotRules(), nil, []domain.ProbeResult{pres}) {
+			for _, ev := range alert.Evaluate(s.effectiveRules(st.ID), nil, []domain.ProbeResult{pres}) {
 				s.dispatchAlert(ctx, ev)
 			}
 		}
@@ -1102,4 +1116,84 @@ func (s *Scheduler) SaveAlertBehavior(ctx context.Context, cooldownMin, digestMi
 	s.lastDigest = map[string]time.Time{}
 	s.digestMu.Unlock()
 	return nil
+}
+
+const stationAlertPrefix = "station_alert_"
+
+// effectiveRules returns the global rules with per-station overrides applied.
+func (s *Scheduler) effectiveRules(stationID string) []alert.Rule {
+	global := s.snapshotRules()
+	s.digestMu.Lock()
+	ov, ok := s.stationOverrides[stationID]
+	s.digestMu.Unlock()
+	if !ok || len(ov.RuleOverrides) == 0 {
+		return global
+	}
+	return alert.MergeRules(global, ov.RuleOverrides)
+}
+
+func (s *Scheduler) effectiveCooldown(stationID string) time.Duration {
+	s.digestMu.Lock()
+	ov, ok := s.stationOverrides[stationID]
+	s.digestMu.Unlock()
+	if ok && ov.CooldownMinutes != nil {
+		return time.Duration(*ov.CooldownMinutes) * time.Minute
+	}
+	return s.cooldown
+}
+
+func (s *Scheduler) effectiveDigestInterval(stationID string) time.Duration {
+	s.digestMu.Lock()
+	ov, ok := s.stationOverrides[stationID]
+	s.digestMu.Unlock()
+	if ok && ov.DigestIntervalMinutes != nil {
+		return time.Duration(*ov.DigestIntervalMinutes) * time.Minute
+	}
+	return s.digestInterval
+}
+
+// LoadStationOverrides loads all per-station alert overrides from the store.
+func (s *Scheduler) LoadStationOverrides(ctx context.Context) error {
+	all, err := s.Store.ListAppSettingsByPrefix(ctx, stationAlertPrefix)
+	if err != nil {
+		return err
+	}
+	m := make(map[string]alert.StationAlertOverride, len(all))
+	for key, val := range all {
+		sid := key[len(stationAlertPrefix):]
+		var ov alert.StationAlertOverride
+		if err := json.Unmarshal([]byte(val), &ov); err != nil {
+			continue
+		}
+		m[sid] = ov
+	}
+	s.digestMu.Lock()
+	s.stationOverrides = m
+	s.digestMu.Unlock()
+	return nil
+}
+
+// SaveStationOverride persists and hot-reloads one station's alert override.
+func (s *Scheduler) SaveStationOverride(ctx context.Context, stationID string, ov alert.StationAlertOverride) error {
+	blob, err := json.Marshal(ov)
+	if err != nil {
+		return err
+	}
+	if err := s.Store.SetAppSetting(ctx, stationAlertPrefix+stationID, string(blob)); err != nil {
+		return err
+	}
+	s.digestMu.Lock()
+	if s.stationOverrides == nil {
+		s.stationOverrides = map[string]alert.StationAlertOverride{}
+	}
+	s.stationOverrides[stationID] = ov
+	s.digestMu.Unlock()
+	return nil
+}
+
+// GetStationOverride returns the per-station alert override (or empty).
+func (s *Scheduler) GetStationOverride(_ context.Context, stationID string) alert.StationAlertOverride {
+	s.digestMu.Lock()
+	defer s.digestMu.Unlock()
+	return s.stationOverrides[stationID]
 }

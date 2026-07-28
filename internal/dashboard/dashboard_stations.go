@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"transitmonitor/internal/alert"
 	"transitmonitor/internal/domain"
 	"transitmonitor/internal/jwtlogin"
 	"transitmonitor/internal/normalize"
@@ -413,7 +414,9 @@ func (s *Server) stationEditHTML(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "station not found", http.StatusNotFound)
 		return
 	}
-	s.writeHTMLShell(w, lang, t(lang, "title.editstation"), "stations", stationForm(lang, &st))
+	body := stationForm(lang, &st)
+	body += s.stationAlertOverrideSection(r.Context(), lang, st.ID)
+	s.writeHTMLShell(w, lang, t(lang, "title.editstation"), "stations", body)
 }
 
 // stationForm renders the add (edit==nil) or edit form. Secret fields are never
@@ -961,4 +964,140 @@ func (s *Server) stationGroupSettingsSave(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// stationAlertOverrideSection renders the per-station alert override card for
+// the edit page. Reads current override + global rules from the scheduler.
+func (s *Server) stationAlertOverrideSection(ctx context.Context, lang, stationID string) string {
+	var ov alert.StationAlertOverride
+	if getter, ok := s.mgr.(interface {
+		GetStationOverride(context.Context, string) alert.StationAlertOverride
+	}); ok {
+		ov = getter.GetStationOverride(ctx, stationID)
+	}
+	var globalRules []alert.Rule
+	if ar, ok := s.mgr.(interface {
+		AlertRules(context.Context) []alert.Rule
+	}); ok {
+		globalRules = ar.AlertRules(ctx)
+	}
+	globalCD, globalDI := 30, 0
+	if bev, ok := s.mgr.(interface {
+		AlertBehavior() (int, int)
+	}); ok {
+		globalCD, globalDI = bev.AlertBehavior()
+	}
+
+	overrideMap := make(map[string]alert.RuleOverride, len(ov.RuleOverrides))
+	for _, ro := range ov.RuleOverrides {
+		overrideMap[ro.Name] = ro
+	}
+
+	cdVal, diVal := "", ""
+	if ov.CooldownMinutes != nil {
+		cdVal = fmt.Sprintf("%d", *ov.CooldownMinutes)
+	}
+	if ov.DigestIntervalMinutes != nil {
+		diVal = fmt.Sprintf("%d", *ov.DigestIntervalMinutes)
+	}
+
+	var b strings.Builder
+	b.WriteString(`<div class="card" style="margin-top:1rem"><h2>` + t(lang, "section.alert_override") + `</h2>`)
+	b.WriteString(`<p class="meta">` + t(lang, "form.override.hint") + `</p>`)
+
+	b.WriteString(`<div class="form-grid">`)
+	b.WriteString(`<div class="field"><span class="field-label">` + t(lang, "form.cooldown") +
+		`</span><input id="ov-cd" type="number" min="0" value="` + esc(cdVal) +
+		`" placeholder="` + fmt.Sprintf("%s: %d", t(lang, "form.override.inherit"), globalCD) + `"></div>`)
+	b.WriteString(`<div class="field"><span class="field-label">` + t(lang, "form.digest") +
+		`</span><input id="ov-di" type="number" min="0" value="` + esc(diVal) +
+		`" placeholder="` + fmt.Sprintf("%s: %d", t(lang, "form.override.inherit"), globalDI) + `"></div>`)
+	b.WriteString(`</div>`)
+
+	if len(globalRules) > 0 {
+		b.WriteString(`<table class="tbl" style="margin-top:.8rem"><thead><tr>`)
+		b.WriteString(`<th>` + t(lang, "form.rule.name") + `</th>`)
+		b.WriteString(`<th>` + t(lang, "form.rule.threshold") + `</th>`)
+		b.WriteString(`<th>` + t(lang, "form.rule.enabled") + `</th>`)
+		b.WriteString(`<th>` + t(lang, "form.rule.direction") + `</th>`)
+		b.WriteString(`</tr></thead><tbody id="ov-rules">`)
+		for _, r := range globalRules {
+			ro := overrideMap[r.Name]
+			thrVal, thrPH := "", fmt.Sprintf("%s: %g", t(lang, "form.override.inherit"), r.Threshold)
+			if ro.Threshold != nil {
+				thrVal = fmt.Sprintf("%g", *ro.Threshold)
+			}
+			enabledSel := "" // inherit
+			if ro.Enabled != nil {
+				if *ro.Enabled {
+					enabledSel = "true"
+				} else {
+					enabledSel = "false"
+				}
+			}
+			dirSel := ""
+			if ro.Direction != nil {
+				dirSel = *ro.Direction
+			}
+			b.WriteString(`<tr data-rule="` + esc(r.Name) + `">`)
+			b.WriteString(`<td class="meta">` + esc(r.Name) + `</td>`)
+			b.WriteString(`<td><input class="ov-thr" type="number" step="any" min="0" value="` + thrVal +
+				`" placeholder="` + esc(thrPH) + `" style="width:80px"></td>`)
+			b.WriteString(`<td><select class="ov-en">`)
+			b.WriteString(selOpt("", t(lang, "form.override.inherit"), enabledSel))
+			b.WriteString(selOpt("true", t(lang, "form.override.enable"), enabledSel))
+			b.WriteString(selOpt("false", t(lang, "form.override.disable"), enabledSel))
+			b.WriteString(`</select></td>`)
+			b.WriteString(`<td><select class="ov-dir">`)
+			b.WriteString(selOpt("", t(lang, "form.override.inherit"), dirSel))
+			b.WriteString(selOpt("both", t(lang, "form.rule.dir.both"), dirSel))
+			b.WriteString(selOpt("up", t(lang, "form.rule.dir.up"), dirSel))
+			b.WriteString(selOpt("down", t(lang, "form.rule.dir.down"), dirSel))
+			b.WriteString(`</select></td>`)
+			b.WriteString(`</tr>`)
+		}
+		b.WriteString(`</tbody></table>`)
+	}
+
+	sid := esc(stationID)
+	b.WriteString(`<div style="margin-top:.6rem"><button type="button" class="btn" onclick="tmSaveStationOverride()">` +
+		t(lang, "btn.save") + `</button></div>`)
+	b.WriteString(`</div>`)
+
+	b.WriteString(`<script>
+function tmSaveStationOverride(){
+  var cd=document.getElementById('ov-cd').value;
+  var di=document.getElementById('ov-di').value;
+  var ov={};
+  if(cd!=='')ov.cooldown_minutes=parseInt(cd);
+  if(di!=='')ov.digest_interval_minutes=parseInt(di);
+  var rows=document.querySelectorAll('#ov-rules tr[data-rule]');
+  if(rows.length>0){
+    ov.rule_overrides=[];
+    rows.forEach(function(tr){
+      var o={name:tr.dataset.rule};
+      var tv=tr.querySelector('.ov-thr').value;
+      if(tv!=='')o.threshold=parseFloat(tv);
+      var ev=tr.querySelector('.ov-en').value;
+      if(ev==='true')o.enabled=true;else if(ev==='false')o.enabled=false;
+      var dv=tr.querySelector('.ov-dir').value;
+      if(dv!=='')o.direction=dv;
+      ov.rule_overrides.push(o);
+    });
+  }
+  fetch('/api/stations/` + sid + `/alert-override',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(ov)})
+    .then(function(r){if(r.ok){alert('OK');location.reload();}else{r.text().then(function(t){alert(t);});}})
+    .catch(function(e){alert(e);});
+}
+</script>`)
+
+	return b.String()
+}
+
+func selOpt(val, label, selected string) string {
+	sel := ""
+	if val == selected {
+		sel = " selected"
+	}
+	return `<option value="` + esc(val) + `"` + sel + `>` + esc(label) + `</option>`
 }

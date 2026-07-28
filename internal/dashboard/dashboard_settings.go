@@ -7,6 +7,8 @@ import (
 	"net/http"
 
 	"transitmonitor/internal/alert"
+
+	"github.com/go-chi/chi/v5"
 )
 
 // settingsHTML renders the /settings page with two sub-tabs:
@@ -488,6 +490,37 @@ func (s *Server) settingsBehaviorSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := saver.SaveAlertBehavior(r.Context(), in.CooldownMinutes, in.DigestIntervalMinutes); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "saved"})
+}
+
+// stationAlertOverrideSave handles POST /api/stations/{id}/alert-override.
+func (s *Server) stationAlertOverrideSave(w http.ResponseWriter, r *http.Request) {
+	lang := s.lang(w, r)
+	if s.mgr == nil {
+		http.Error(w, t(lang, "settings.no.manager"), http.StatusServiceUnavailable)
+		return
+	}
+	stationID := chi.URLParam(r, "id")
+	if stationID == "" {
+		http.Error(w, "station id required", http.StatusBadRequest)
+		return
+	}
+	var ov alert.StationAlertOverride
+	if err := json.NewDecoder(r.Body).Decode(&ov); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	saver, ok := s.mgr.(interface {
+		SaveStationOverride(context.Context, string, alert.StationAlertOverride) error
+	})
+	if !ok {
+		http.Error(w, t(lang, "settings.no.manager"), http.StatusServiceUnavailable)
+		return
+	}
+	if err := saver.SaveStationOverride(r.Context(), stationID, ov); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
