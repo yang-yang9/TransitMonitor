@@ -488,7 +488,7 @@ func pageShell(lang, title, active, body string, showLogout bool) string {
 		// dots and per-user-override ✎ badges (any .spark-dot / .gr-ovr with data-tip).
 		`var tip=document.getElementById('tm-tip');var TIP_SEL='.spark-dot, .gr-ovr';document.addEventListener('mouseover',function(e){var d=e.target.closest(TIP_SEL);if(d&&d.dataset.tip){tip.textContent=d.dataset.tip;var r=d.getBoundingClientRect();tip.style.left=(r.left+r.width/2)+'px';tip.style.top=r.top+'px';tip.classList.add('show');}});` +
 		`document.addEventListener('mouseout',function(e){if(e.target.closest(TIP_SEL))tip.classList.remove('show');});` +
-		`document.querySelectorAll('.tip-dot').forEach(function(dot){var pop=dot.parentNode.querySelector('.tip-pop');if(!pop)return;dot.addEventListener('mouseenter',function(){var r=dot.getBoundingClientRect();pop.style.left=(r.right+10)+'px';pop.style.top=(r.top+r.height/2)+'px';pop.style.transform='translateY(-50%)';pop.classList.add('show');});dot.addEventListener('mouseleave',function(){pop.classList.remove('show');});});` +
+		`document.querySelectorAll('.tip-dot').forEach(function(dot){var pop=dot.parentNode.querySelector('.tip-pop');if(!pop)return;dot.addEventListener('mouseenter',function(){var r=dot.getBoundingClientRect();pop.style.transform='none';pop.style.left=r.left+'px';pop.style.top=(r.bottom+8)+'px';if(r.left+pop.offsetWidth>window.innerWidth-16){pop.style.left=Math.max(16,window.innerWidth-pop.offsetWidth-16)+'px';}pop.classList.add('show');});dot.addEventListener('mouseleave',function(){pop.classList.remove('show');});});` +
 		`})();</script>`
 	modalHTML := `<div class="modal-overlay" id="tm-modal"><div class="modal-box">` +
 		`<h3>` + t(lang, "modal.title") + `</h3><p id="tm-modal-msg"></p>` +
