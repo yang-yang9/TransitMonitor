@@ -472,8 +472,16 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
 	ctx := r.Context()
 	var b strings.Builder
+	tipLines := strings.Split(t(lang, "tip.overview"), "\n")
+	var tipHTML strings.Builder
+	for i, line := range tipLines {
+		if i > 0 {
+			tipHTML.WriteString("<br>")
+		}
+		tipHTML.WriteString(esc(line))
+	}
 	b.WriteString(`<div class="page-hdr"><h1>` + t(lang, "title.overview") +
-		` <span class="tip-icon" title="` + esc(t(lang, "tip.overview")) + `">❓</span>` +
+		` <span class="tip-wrap"><span class="tip-dot">?</span><span class="tip-pop">` + tipHTML.String() + `</span></span>` +
 		`</h1><p class="sub">` + t(lang, "sub.overview") +
 		`<a class="btn" href="/matrix">` + t(lang, "btn.matrix") + `</a></p></div>`)
 	// Surface credential-decrypt failures loudly: otherwise the operator only
