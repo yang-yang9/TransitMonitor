@@ -177,10 +177,10 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 		}
 		b.w(`<div class="rule-card card">`)
 		b.w(`<div class="rule-fields">`)
-		// name
-		b.w(`<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") + `</span>`)
-		b.w(`<input class="r-name" value="` + esc(r.Name) + `">` +
-			`<p class="meta">` + ruleTypeLabel(r.Type) + `</p></div>`)
+		// name — label carries the type tag so the row stays single-line
+		b.w(`<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") +
+			` <span class="rule-type-tag">` + ruleTypeLabel(r.Type) + `</span></span>`)
+		b.w(`<input class="r-name" value="` + esc(r.Name) + `"></div>`)
 		// type
 		b.w(`<div class="field rule-f-type"><span class="field-label">` + t(lang, "form.rule.type") + `</span>`)
 		b.w(`<select class="r-type" onchange="tmOnTypeChange(this)">`)
