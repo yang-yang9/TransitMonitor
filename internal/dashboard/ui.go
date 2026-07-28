@@ -199,8 +199,10 @@ details.sec[open]>summary{border-bottom:1px solid var(--border)}
 .pin-btn{background:none;border:none;cursor:pointer;font-size:1rem;opacity:.3;transition:opacity .15s;padding:.1rem .3rem;line-height:1}
 .pin-btn:hover{opacity:.7}
 .pin-btn.pinned{opacity:1}
-.gr-row.gr-pinned .gr-name{font-weight:700;color:var(--primary)}
-.gr-row.gr-pinned .gr-val{color:var(--primary);font-weight:800}
+.gr-row.gr-pinned{background:linear-gradient(90deg,rgba(20,184,166,.14),transparent 70%);border-left:3px solid var(--primary);padding-left:.5rem;margin-left:-.5rem;border-radius:0 4px 4px 0}
+.gr-row.gr-pinned .gr-name{font-weight:800;color:var(--primary-700)}
+.gr-row.gr-pinned .gr-val{color:var(--primary);font-weight:800;font-size:1rem}
+.gr-row.gr-pinned .gr-bar{box-shadow:0 0 8px rgba(20,184,166,.5)}
 
 /* ratio table visual bars + group separators */
 .rat-bar{height:7px;background:var(--bg-2);border-radius:4px;overflow:hidden;margin-bottom:.2rem;min-width:80px}
