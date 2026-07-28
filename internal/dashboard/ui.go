@@ -89,7 +89,7 @@ h1{font-size:1.65rem;margin:0 0 .25rem;font-weight:800;letter-spacing:-.02em;col
 .tip-wrap{position:relative;display:inline-flex;align-items:center;vertical-align:middle}
 .tip-dot{width:18px;height:18px;border-radius:50%;background:var(--bg-2);border:1.5px solid var(--border);color:var(--muted);font-size:.7rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:help;transition:all .15s;line-height:1;font-family:var(--mono)}
 .tip-dot:hover{background:var(--primary-50);border-color:var(--primary);color:var(--primary)}
-.tip-pop{display:none;position:absolute;left:50%;top:calc(100% + 8px);transform:translateX(-50%);min-width:320px;max-width:420px;padding:.7rem .9rem;background:var(--card);border:1.5px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);font-size:.8rem;font-weight:400;line-height:1.7;color:var(--ink2);white-space:normal;z-index:30;pointer-events:none}
+.tip-pop{display:none;position:absolute;left:calc(100% + 10px);top:50%;transform:translateY(-50%);min-width:320px;max-width:420px;padding:.7rem .9rem;background:var(--card);border:1.5px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);font-size:.8rem;font-weight:400;line-height:1.7;color:var(--ink2);white-space:normal;z-index:30;pointer-events:none}
 .tip-wrap:hover .tip-pop{display:block}
 h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;padding-left:.65rem;border-left:3px solid var(--primary);line-height:1.3}
 .sub{color:var(--muted);margin:0 0 1.5rem;font-size:.88rem;line-height:1.7;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
