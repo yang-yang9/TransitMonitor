@@ -89,8 +89,8 @@ h1{font-size:1.65rem;margin:0 0 .25rem;font-weight:800;letter-spacing:-.02em;col
 .tip-wrap{position:relative;display:inline-flex;align-items:center;vertical-align:middle}
 .tip-dot{width:18px;height:18px;border-radius:50%;background:var(--bg-2);border:1.5px solid var(--border);color:var(--muted);font-size:.7rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;cursor:help;transition:all .15s;line-height:1;font-family:var(--mono)}
 .tip-dot:hover{background:var(--primary-50);border-color:var(--primary);color:var(--primary)}
-.tip-pop{display:none;position:absolute;left:calc(100% + 10px);top:50%;transform:translateY(-50%);min-width:320px;max-width:420px;padding:.7rem .9rem;background:var(--card);border:1.5px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);font-size:.8rem;font-weight:400;line-height:1.7;color:var(--ink2);white-space:normal;z-index:30;pointer-events:none}
-.tip-wrap:hover .tip-pop{display:block}
+.tip-pop{display:none;position:fixed;min-width:320px;max-width:420px;padding:.7rem .9rem;background:var(--card);border:1.5px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);font-size:.8rem;font-weight:400;line-height:1.7;color:var(--ink2);white-space:normal;z-index:9999}
+.tip-pop.show{display:block}
 h2{font-size:1.05rem;font-weight:700;color:var(--ink2);margin:1.2rem 0 .7rem;padding-left:.65rem;border-left:3px solid var(--primary);line-height:1.3}
 .sub{color:var(--muted);margin:0 0 1.5rem;font-size:.88rem;line-height:1.7;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
 .page-hdr{margin-bottom:1.8rem}
@@ -488,6 +488,7 @@ func pageShell(lang, title, active, body string, showLogout bool) string {
 		// dots and per-user-override ✎ badges (any .spark-dot / .gr-ovr with data-tip).
 		`var tip=document.getElementById('tm-tip');var TIP_SEL='.spark-dot, .gr-ovr';document.addEventListener('mouseover',function(e){var d=e.target.closest(TIP_SEL);if(d&&d.dataset.tip){tip.textContent=d.dataset.tip;var r=d.getBoundingClientRect();tip.style.left=(r.left+r.width/2)+'px';tip.style.top=r.top+'px';tip.classList.add('show');}});` +
 		`document.addEventListener('mouseout',function(e){if(e.target.closest(TIP_SEL))tip.classList.remove('show');});` +
+		`document.querySelectorAll('.tip-dot').forEach(function(dot){var pop=dot.parentNode.querySelector('.tip-pop');if(!pop)return;dot.addEventListener('mouseenter',function(){var r=dot.getBoundingClientRect();pop.style.left=(r.right+10)+'px';pop.style.top=(r.top+r.height/2)+'px';pop.style.transform='translateY(-50%)';pop.classList.add('show');});dot.addEventListener('mouseleave',function(){pop.classList.remove('show');});});` +
 		`})();</script>`
 	modalHTML := `<div class="modal-overlay" id="tm-modal"><div class="modal-box">` +
 		`<h3>` + t(lang, "modal.title") + `</h3><p id="tm-modal-msg"></p>` +
