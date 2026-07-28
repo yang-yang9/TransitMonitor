@@ -1015,12 +1015,7 @@ func (s *Server) stationAlertOverrideSection(ctx context.Context, lang, stationI
 	b.WriteString(`</div>`)
 
 	if len(globalRules) > 0 {
-		b.WriteString(`<table class="tbl" style="margin-top:.8rem"><thead><tr>`)
-		b.WriteString(`<th>` + t(lang, "form.rule.name") + `</th>`)
-		b.WriteString(`<th>` + t(lang, "form.rule.threshold") + `</th>`)
-		b.WriteString(`<th>` + t(lang, "form.rule.enabled") + `</th>`)
-		b.WriteString(`<th>` + t(lang, "form.rule.direction") + `</th>`)
-		b.WriteString(`</tr></thead><tbody id="ov-rules">`)
+		b.WriteString(`<div id="ov-rules" style="margin-top:.8rem">`)
 		for _, r := range globalRules {
 			ro := overrideMap[r.Name]
 			thrVal, thrPH := "", fmt.Sprintf("%s: %g", t(lang, "form.override.inherit"), r.Threshold)
@@ -1039,28 +1034,36 @@ func (s *Server) stationAlertOverrideSection(ctx context.Context, lang, stationI
 			if ro.Direction != nil {
 				dirSel = *ro.Direction
 			}
-			b.WriteString(`<tr data-rule="` + esc(r.Name) + `">`)
-			b.WriteString(`<td class="meta">` + esc(r.Name) + `</td>`)
-			b.WriteString(`<td><input class="ov-thr" type="number" step="any" min="0" value="` + thrVal +
-				`" placeholder="` + esc(thrPH) + `" style="width:80px"></td>`)
-			b.WriteString(`<td><select class="ov-en">`)
+			b.WriteString(`<div class="rule-card card" data-rule="` + esc(r.Name) + `"><div class="rule-fields">`)
+			// rule name (read-only)
+			b.WriteString(`<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") +
+				`</span><input class="ov-name" value="` + esc(r.Name) + `" readonly></div>`)
+			// threshold override
+			b.WriteString(`<div class="field rule-f-thr"><span class="field-label">` + t(lang, "form.rule.threshold") +
+				`</span><input class="ov-thr" type="number" step="any" min="0" value="` + thrVal +
+				`" placeholder="` + esc(thrPH) + `"></div>`)
+			// enabled (three-state select)
+			b.WriteString(`<div class="field rule-f-en"><span class="field-label">` + t(lang, "form.rule.enabled") +
+				`</span><select class="ov-en">`)
 			b.WriteString(selOpt("", t(lang, "form.override.inherit"), enabledSel))
 			b.WriteString(selOpt("true", t(lang, "form.override.enable"), enabledSel))
 			b.WriteString(selOpt("false", t(lang, "form.override.disable"), enabledSel))
-			b.WriteString(`</select></td>`)
-			b.WriteString(`<td><select class="ov-dir">`)
+			b.WriteString(`</select></div>`)
+			// direction (four-state select, includes inherit)
+			b.WriteString(`<div class="field rule-f-dir"><span class="field-label">` + t(lang, "form.rule.direction") +
+				`</span><select class="ov-dir">`)
 			b.WriteString(selOpt("", t(lang, "form.override.inherit"), dirSel))
 			b.WriteString(selOpt("both", t(lang, "form.rule.dir.both"), dirSel))
 			b.WriteString(selOpt("up", t(lang, "form.rule.dir.up"), dirSel))
 			b.WriteString(selOpt("down", t(lang, "form.rule.dir.down"), dirSel))
-			b.WriteString(`</select></td>`)
-			b.WriteString(`</tr>`)
+			b.WriteString(`</select></div>`)
+			b.WriteString(`</div></div>`)
 		}
-		b.WriteString(`</tbody></table>`)
+		b.WriteString(`</div>`)
 	}
 
 	sid := esc(stationID)
-	b.WriteString(`<div style="margin-top:.6rem"><button type="button" class="btn" onclick="tmSaveStationOverride()">` +
+	b.WriteString(`<div class="rule-actions"><button type="button" class="btn" onclick="tmSaveStationOverride()">` +
 		t(lang, "btn.save") + `</button></div>`)
 	b.WriteString(`</div>`)
 
@@ -1071,16 +1074,16 @@ function tmSaveStationOverride(){
   var ov={};
   if(cd!=='')ov.cooldown_minutes=parseInt(cd);
   if(di!=='')ov.digest_interval_minutes=parseInt(di);
-  var rows=document.querySelectorAll('#ov-rules tr[data-rule]');
-  if(rows.length>0){
+  var cards=document.querySelectorAll('#ov-rules .rule-card[data-rule]');
+  if(cards.length>0){
     ov.rule_overrides=[];
-    rows.forEach(function(tr){
-      var o={name:tr.dataset.rule};
-      var tv=tr.querySelector('.ov-thr').value;
+    cards.forEach(function(c){
+      var o={name:c.dataset.rule};
+      var tv=c.querySelector('.ov-thr').value;
       if(tv!=='')o.threshold=parseFloat(tv);
-      var ev=tr.querySelector('.ov-en').value;
+      var ev=c.querySelector('.ov-en').value;
       if(ev==='true')o.enabled=true;else if(ev==='false')o.enabled=false;
-      var dv=tr.querySelector('.ov-dir').value;
+      var dv=c.querySelector('.ov-dir').value;
       if(dv!=='')o.direction=dv;
       ov.rule_overrides.push(o);
     });
