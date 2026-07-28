@@ -1037,7 +1037,8 @@ func (s *Server) stationAlertOverrideSection(ctx context.Context, lang, stationI
 			b.WriteString(`<div class="rule-card card" data-rule="` + esc(r.Name) + `"><div class="rule-fields">`)
 			// rule name (read-only)
 			b.WriteString(`<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") +
-				`</span><input class="ov-name" value="` + esc(r.Name) + `" readonly></div>`)
+				`</span><input class="ov-name" value="` + esc(r.Name) + `" readonly>` +
+				`<p class="meta">` + ruleTypeLabel(r.Type) + `</p></div>`)
 			// threshold override
 			b.WriteString(`<div class="field rule-f-thr"><span class="field-label">` + t(lang, "form.rule.threshold") +
 				`</span><input class="ov-thr" type="number" step="any" min="0" value="` + thrVal +
@@ -1103,4 +1104,33 @@ func selOpt(val, label, selected string) string {
 		sel = " selected"
 	}
 	return `<option value="` + esc(val) + `"` + sel + `>` + esc(label) + `</option>`
+}
+
+// ruleTypeLabel returns a human-readable Chinese label for a rule type.
+// Shared by the rules editor and the station override section.
+func ruleTypeLabel(typ string) string {
+	switch typ {
+	case "delta_pct":
+		return "价格变动百分比"
+	case "delta_abs":
+		return "价格变动绝对值"
+	case "model_added":
+		return "模型新增"
+	case "model_removed":
+		return "模型下架"
+	case "probe_markup_pct":
+		return "探测加价百分比"
+	case "endpoint_auth_failed":
+		return "鉴权失败"
+	case "poll_failure_streak":
+		return "连续轮询失败"
+	case "group_ratio_delta_pct":
+		return "分组倍率变动百分比"
+	case "quota_below":
+		return "余额低于阈值"
+	case "quota_drop_pct":
+		return "余额下降百分比"
+	default:
+		return typ
+	}
 }

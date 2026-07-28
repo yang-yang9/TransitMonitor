@@ -179,7 +179,8 @@ func (s *Server) settingsRulesTab(b *pageBuilder, ctx context.Context, lang stri
 		b.w(`<div class="rule-fields">`)
 		// name
 		b.w(`<div class="field rule-f-name"><span class="field-label">` + t(lang, "form.rule.name") + `</span>`)
-		b.w(`<input class="r-name" value="` + esc(r.Name) + `"></div>`)
+		b.w(`<input class="r-name" value="` + esc(r.Name) + `">` +
+			`<p class="meta">` + ruleTypeLabel(r.Type) + `</p></div>`)
 		// type
 		b.w(`<div class="field rule-f-type"><span class="field-label">` + t(lang, "form.rule.type") + `</span>`)
 		b.w(`<select class="r-type" onchange="tmOnTypeChange(this)">`)
