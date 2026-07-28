@@ -472,7 +472,9 @@ func (s *Server) overviewHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
 	ctx := r.Context()
 	var b strings.Builder
-	b.WriteString(`<div class="page-hdr"><h1>` + t(lang, "title.overview") + `</h1><p class="sub">` + t(lang, "sub.overview") +
+	b.WriteString(`<div class="page-hdr"><h1>` + t(lang, "title.overview") +
+		` <span class="tip-icon" title="` + esc(t(lang, "tip.overview")) + `">❓</span>` +
+		`</h1><p class="sub">` + t(lang, "sub.overview") +
 		`<a class="btn" href="/matrix">` + t(lang, "btn.matrix") + `</a></p></div>`)
 	// Surface credential-decrypt failures loudly: otherwise the operator only
 	// sees misleading downstream "no api_key" poll errors and chases the wrong fix.
