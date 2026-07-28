@@ -240,8 +240,52 @@ func FormatEvent(ev AlertEvent) string {
 	}
 }
 
-// num is a tidy numeric formatter (unused outside FormatEvent after refactor).
-// Kept for reference; FormatEvent uses its own closure.
+// StationAlertOverride holds per-station overrides for alert behavior.
+// Nil pointer fields mean "inherit from global".
+type StationAlertOverride struct {
+	CooldownMinutes       *int           `json:"cooldown_minutes,omitempty"`
+	DigestIntervalMinutes *int           `json:"digest_interval_minutes,omitempty"`
+	RuleOverrides         []RuleOverride `json:"rule_overrides,omitempty"`
+}
+
+// RuleOverride overrides a single global rule's fields for one station.
+type RuleOverride struct {
+	Name      string   `json:"name"`
+	Threshold *float64 `json:"threshold,omitempty"`
+	Direction *string  `json:"direction,omitempty"`
+	Enabled   *bool    `json:"enabled,omitempty"`
+}
+
+// MergeRules returns a copy of global with per-station overrides applied.
+// Overrides match by Name; unmatched overrides are ignored, unmatched globals
+// pass through unchanged.
+func MergeRules(global []Rule, overrides []RuleOverride) []Rule {
+	if len(overrides) == 0 {
+		out := make([]Rule, len(global))
+		copy(out, global)
+		return out
+	}
+	idx := make(map[string]RuleOverride, len(overrides))
+	for _, o := range overrides {
+		idx[o.Name] = o
+	}
+	out := make([]Rule, len(global))
+	for i, r := range global {
+		out[i] = r
+		if o, ok := idx[r.Name]; ok {
+			if o.Threshold != nil {
+				out[i].Threshold = *o.Threshold
+			}
+			if o.Direction != nil {
+				out[i].Direction = *o.Direction
+			}
+			if o.Enabled != nil {
+				out[i].Enabled = *o.Enabled
+			}
+		}
+	}
+	return out
+}
 
 func abs(f float64) float64 {
 	if f < 0 {

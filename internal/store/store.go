@@ -972,6 +972,30 @@ func (s *Store) GetAppSetting(ctx context.Context, key string) (string, bool, er
 	return v, true, nil
 }
 
+// ListAppSettingsByPrefix returns all app_settings whose key starts with prefix.
+func (s *Store) ListAppSettingsByPrefix(ctx context.Context, prefix string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT key, value FROM app_settings WHERE key LIKE ?", prefix+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		m[k] = v
+	}
+	return m, rows.Err()
+}
+
+// DeleteAppSetting removes a single key from app_settings.
+func (s *Store) DeleteAppSetting(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM app_settings WHERE key=?", key)
+	return err
+}
+
 // AlertEventRow is a persisted alert event (for the /alerts page).
 type AlertEventRow struct {
 	ID        int64
