@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -57,6 +58,15 @@ func (s *Server) findStation(id string) (domain.Station, bool) {
 		}
 	}
 	return domain.Station{}, false
+}
+
+// stationIDParam returns the URL-decoded {id} path param. chi v5 returns the
+// matched segment from the ENCODED path (it does not URL-decode), so station
+// IDs containing & or non-ASCII arrive percent-encoded and must be unescaped
+// before lookup/storage — otherwise save and read keys diverge.
+func stationIDParam(r *http.Request) string {
+	id, _ := url.PathUnescape(chi.URLParam(r, "id"))
+	return id
 }
 
 // GET /stations — management page: list + add link + edit/delete buttons.
@@ -153,7 +163,7 @@ func effRatios(o domain.RatioObservation, gr, cr float64) (ei, eo float64) {
 
 func (s *Server) stationDetailHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
-	id := chi.URLParam(r, "id")
+	id := stationIDParam(r)
 	st, ok := s.findStation(id)
 	if !ok {
 		http.Error(w, "station not found", http.StatusNotFound)
@@ -409,7 +419,7 @@ func (s *Server) stationFormHTML(w http.ResponseWriter, r *http.Request) {
 // GET /stations/{id}/edit — edit-station form (pre-fills non-secret fields; secrets blank = keep).
 func (s *Server) stationEditHTML(w http.ResponseWriter, r *http.Request) {
 	lang := s.lang(w, r)
-	st, ok := s.findStation(chi.URLParam(r, "id"))
+	st, ok := s.findStation(stationIDParam(r))
 	if !ok {
 		http.Error(w, "station not found", http.StatusNotFound)
 		return
@@ -618,7 +628,7 @@ func (s *Server) stationsUpsert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	in.ID = chi.URLParam(r, "id")
+	in.ID = stationIDParam(r)
 	if existing, ok := s.findStation(in.ID); ok {
 		if in.Auth.APIKey == "" {
 			in.Auth.APIKey = existing.Auth.APIKey
@@ -667,7 +677,7 @@ func (s *Server) stationsDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "station manager not configured", http.StatusServiceUnavailable)
 		return
 	}
-	id := chi.URLParam(r, "id")
+	id := stationIDParam(r)
 	if err := s.mgr.RemoveStation(id); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -745,7 +755,7 @@ func (s *Server) stationsPoll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "station manager not configured", http.StatusServiceUnavailable)
 		return
 	}
-	id := chi.URLParam(r, "id")
+	id := stationIDParam(r)
 	poller, ok := s.mgr.(interface{ PollNow(string) error })
 	if !ok {
 		http.Error(w, "poll not supported", http.StatusNotImplemented)
@@ -767,7 +777,7 @@ func (s *Server) stationsLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]string{"error": "station manager not configured"})
 		return
 	}
-	id := chi.URLParam(r, "id")
+	id := stationIDParam(r)
 	st, ok := s.findStation(id)
 	if !ok {
 		writeJSON(w, 200, map[string]string{"error": "station not found"})
@@ -941,7 +951,7 @@ type groupConfigInput struct {
 // POST /stations/{id}/groups — replace the station's per-group display config.
 // Body: {"groups":[{group_name,visible,sort_order}]}. Returns {"ok":true}.
 func (s *Server) stationGroupSettingsSave(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := stationIDParam(r)
 	if _, ok := s.findStation(id); !ok {
 		writeJSON(w, 404, map[string]string{"error": "station not found"})
 		return
@@ -1063,7 +1073,7 @@ func (s *Server) stationAlertOverrideSection(ctx context.Context, lang, stationI
 		b.WriteString(`</div>`)
 	}
 
-	sid := esc(stationID)
+	sid := jsEscape(stationID)
 	b.WriteString(`<div class="rule-actions"><button type="button" class="btn" onclick="tmSaveStationOverride()">` +
 		t(lang, "btn.save") + `</button></div>`)
 	b.WriteString(`</div>`)
@@ -1104,6 +1114,28 @@ func selOpt(val, label, selected string) string {
 		sel = " selected"
 	}
 	return `<option value="` + esc(val) + `"` + sel + `>` + esc(label) + `</option>`
+}
+
+// jsEscape escapes s for safe embedding inside a JS single-quoted string
+// (escapes \, ', and newlines; preserves other bytes like & verbatim, since
+// HTML entity-escaping inside <script> blocks is NOT decoded by browsers and
+// would corrupt station IDs containing &). Use for IDs injected into inline
+// <script> fetch URLs.
+func jsEscape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '\'':
+			b.WriteString(`\'`)
+		case '\n':
+			b.WriteString(`\n`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // ruleTypeLabel returns a human-readable Chinese label for a rule type.
