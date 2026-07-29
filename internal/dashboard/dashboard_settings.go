@@ -7,8 +7,6 @@ import (
 	"net/http"
 
 	"transitmonitor/internal/alert"
-
-	"github.com/go-chi/chi/v5"
 )
 
 // settingsHTML renders the /settings page with two sub-tabs:
@@ -504,7 +502,7 @@ func (s *Server) stationAlertOverrideSave(w http.ResponseWriter, r *http.Request
 		http.Error(w, t(lang, "settings.no.manager"), http.StatusServiceUnavailable)
 		return
 	}
-	stationID := chi.URLParam(r, "id")
+	stationID := stationIDParam(r)
 	if stationID == "" {
 		http.Error(w, "station id required", http.StatusBadRequest)
 		return
